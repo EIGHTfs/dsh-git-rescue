@@ -410,6 +410,22 @@ dsh-git-rescue/
 
 **版本号**：合并后大版本数据结构未变（仍根级结构）→ 保持 2.x 线，本次合并为 2.1.0。
 
+## ✅ 2.2.0 还原策略改进（2026-08-21 用户确立：还原只还原 profile）
+
+**问题**：guardian/手动回退原用 `git reset --hard` 全量回退整个 .dsh，而 `sessions/`（131 文件，历史 force-add）与 `.credentials.yaml` 曾被跟踪 → 崩溃救援会把会话数据一并覆盖还原（「测试环境触发救援全还原」的深层原因之一）。
+
+**改进**：
+
+| 项 | 说明 |
+|----|------|
+| `restoreProfileOnly` | 只 checkout 配置类路径（profiles / settings.yaml / skills / .gitignore / .anonymous-user-id / session-transfer）回好提交；数据目录完全不触碰 |
+| `untrackDataDirs` + `DATA_DIRS` | sessions/storages/snapshot-archive/git-rescue/.credentials.yaml 从 git 索引移除（工作区文件保留），防 reset/checkout 覆盖；.gitignore 幂等补全覆盖 |
+| guardian recover | 主恢复路径 + LLM 自治 git_reset 动作均改用 restoreProfileOnly |
+| 手动 rollback | rollbackRepo 改用 restoreProfileOnly（事件记录 `mode=profile-only`） |
+| 现网一次性修正 | .dsh 仓库 sessions(131)/.credentials.yaml/git-rescue 等 140 文件解除跟踪（commit 45d2def），工作区数据完整保留 |
+
+**语义**：完整备份（commit 快照）不变；崩溃回退只把配置/插件恢复到好提交，会话与注册表数据保持现状——救援不再"顺手覆盖"数据。
+
 ## 🔗 联动与源码地址
 
 ### 联动：自动续跑全局闸门（dsh-git-rescue ⇄ dsh-session-manager）

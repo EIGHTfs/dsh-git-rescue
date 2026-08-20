@@ -1,7 +1,7 @@
 {
   "name": "dsh-git-rescue",
-  "version": "2.1.0",
-  "description": "DSH 救援恢复插件（2.1.0 合并版：以 2.0.0 重构为基底，合并 v1.13.0 独有功能——救援积分/沙盒检测/会话恢复联动/测试环境保护）：守护进程 + .dsh git 仓库管理 + 远端私有库备份（token/SSH 双方案）+ 开机自启 + 救援环境 + 专项恢复工具 + git 还原 + 纯净 dsh 协助兜底 + 版本自动更新（大版本/结构不一致走卸载重装）",
+  "version": "2.2.0",
+  "description": "DSH 救援恢复插件（2.2.0：还原只还原 profile 不覆盖数据目录）：守护进程 + .dsh git 仓库管理 + 远端备份（token/SSH）+ 救援环境 + 专项工具 + git 还原（配置类路径，sessions/storages 数据不被覆盖）+ 纯净 dsh 协助兜底 + 自动更新（大版本/结构不一致卸载重装）",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
