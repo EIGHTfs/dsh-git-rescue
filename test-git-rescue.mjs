@@ -259,6 +259,43 @@ ok('dir-tree 路径不存在不崩溃', t13missing.text.includes('不存在') ||
 const t13platform = await dirTree.buildDirTree(testTreeDir, { depth: 1 })
 ok('dir-tree 相对/绝对路径均可用', t13platform.text.startsWith(testTreeDir) || t13platform.text.startsWith('.'))
 
+// T14: 只还原 profile（2026-08-21 用户要求：还原不覆盖数据目录）
+console.log('== T14: restoreProfileOnly 只还原配置、不覆盖数据 ==')
+{
+  const tdir = await mkdtemp(join(tmpdir(), 'gitrescue-t14-'))
+  try {
+    await git.initRepo(tdir)
+    await fs.mkdir(join(tdir, 'profiles', 'web'), { recursive: true })
+    await fs.mkdir(join(tdir, 'sessions'), { recursive: true })
+    await fs.writeFile(join(tdir, 'profiles/web/cordis.patch.yml'), 'good-config\n')
+    await fs.writeFile(join(tdir, 'sessions/s1.jsonl.zstd'), 'good-session\n')
+    await git.commit(tdir, 'v1 good')
+    const goodRef = await git.headRef(tdir)
+    // v2 破坏：配置改坏 + 会话新增
+    await fs.writeFile(join(tdir, 'profiles/web/cordis.patch.yml'), 'BROKEN\n')
+    await fs.writeFile(join(tdir, 'sessions/s2.jsonl.zstd'), 'new-session\n')
+    await git.commit(tdir, 'v2 broken')
+    // 模拟历史误跟踪 sessions（force-add）
+    await git.runGit(['add', '-f', 'sessions/'], { cwd: tdir })
+    await git.commit(tdir, 'v3 force-added')
+    // 破坏会话数据
+    await fs.writeFile(join(tdir, 'profiles/web/cordis.patch.yml'), 'MOST-BROKEN\n')
+    await fs.writeFile(join(tdir, 'sessions/s1.jsonl.zstd'), 'OVERWRITTEN-DATA\n')
+    const rr = await git.restoreProfileOnly(tdir, goodRef)
+    ok('restore 返回 ok', rr.ok === true, rr.error || '')
+    const cfgAfter = (await fs.readFile(join(tdir, 'profiles/web/cordis.patch.yml'), 'utf8')).trim()
+    const s1After = (await fs.readFile(join(tdir, 'sessions/s1.jsonl.zstd'), 'utf8')).trim()
+    const s2Exists = await fs.access(join(tdir, 'sessions/s2.jsonl.zstd')).then(() => true).catch(() => false)
+    const trackedAfter = (await git.runGit(['ls-files'], { cwd: tdir })).stdout
+    ok('配置还原为 good 版本', cfgAfter === 'good-config', `cfg=${cfgAfter}`)
+    ok('会话数据未被覆盖（保留破坏后内容）', s1After === 'OVERWRITTEN-DATA', `s1=${s1After}`)
+    ok('新增会话文件保留', s2Exists === true)
+    ok('sessions 已解除跟踪', !trackedAfter.includes('sessions/'))
+  } finally {
+    await fs.rm(tdir, { recursive: true, force: true })
+  }
+}
+
 // ---------- 汇总（所有 T 完成后统一统计，2026-08-21 修复：原汇总在 T9 前导致 T9-T13 失败不退出） ----------
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }

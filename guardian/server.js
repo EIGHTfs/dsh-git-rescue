@@ -21,7 +21,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import http from 'node:http'
-import { runGit, commit, headRef, markBad, lastGoodCommit, hardReset } from '../lib/git.js'
+import { runGit, commit, headRef, markBad, lastGoodCommit, hardReset, restoreProfileOnly } from '../lib/git.js'
 import { createFlappingDetector } from '../lib/flapping.js'
 import { probeDshHealth } from '../lib/probe.js'
 import { startDshWithLog, captureExitContext, readLogTail } from '../lib/process-capture.js'
@@ -751,9 +751,12 @@ async function recover(source = 'auto') {
     // 3) 找最后一个好提交并回退
     const good = await lastGoodCommit(CFG.dshHome)
     if (!good) { log('error', '没有可回退的好提交'); state.dsh = 'error'; return { ok: false, error: 'no good commit' } }
-    const reset = await hardReset(CFG.dshHome, good)
-    if (!reset.ok) { log('error', `git reset 失败: ${reset.error}`); state.dsh = 'error'; return { ok: false, error: reset.error } }
-    log('info', `已回退到 ${good}（from ${head || '无提交'}）`)
+    // 2026-08-21 用户要求：还原只还原 profile/配置，不覆盖 sessions/storages 数据目录
+    // （完整备份 commit 不变；回退仅恢复配置类路径，数据保持现状）
+    const restore = await restoreProfileOnly(CFG.dshHome, good)
+    if (!restore.ok) { log('error', `git 回退失败: ${restore.error}`); state.dsh = 'error'; return { ok: false, error: restore.error } }
+    log('info', `已还原配置到 ${good}（from ${head || '无提交'}）: ${restore.restored.join(', ') || '(无可还原项)'}${restore.skipped.length ? `，跳过(不存在/数据): ${restore.skipped.join(', ')}` : ''}`)
+    log('info', `数据目录已解除跟踪（sessions/storages 等不被回退覆盖）: ${restore.removed?.join(', ') || '(无)'}`)
 
     // 3.5) 插件树健康体检（合并自旧版拦截方案，2026-08-20）：
     //       git 回退后、拉起前体检——带病插件即使从 git 历史回退出来，也在拉起前被修掉（00:22 崩溃类型）
@@ -948,9 +951,10 @@ async function executeLlmActions(actions, { maxActions = 3 } = {}) {
         // 先标记当前为坏点（可回滚语义）
         const head = await headRef(CFG.dshHome)
         if (head) await markBad(CFG.dshHome, head)
-        const reset = await hardReset(CFG.dshHome, act.commit)
+        // 2026-08-21：只还原配置，不覆盖数据目录（同主恢复路径）
+        const reset = await restoreProfileOnly(CFG.dshHome, act.commit)
         executed.push(`git_reset:${act.commit}`)
-        results.push({ type: 'git_reset', ok: reset.ok, detail: reset.ok ? `已回退到 ${act.commit}` : reset.error })
+        results.push({ type: 'git_reset', ok: reset.ok, detail: reset.ok ? `已还原配置到 ${act.commit}（${reset.restored.join(', ')}）` : reset.error })
         if (reset.ok) {
           const deadline = Date.now() + CFG.startWaitMs
           let ok = false
