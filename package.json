@@ -1,0 +1,37 @@
+{
+  "name": "dsh-git-rescue",
+  "version": "2.0.0",
+  "description": "DSH 救援恢复插件（2.0.0 完全重构）：守护进程 + .dsh git 仓库管理 + 远端私有库备份（.dsh@<dsh版本>.<设备ID>，token/SSH 双方案）+ 开机自启 + 救援环境（<版本>@Save-clean / @Save-test，纯净环境防装插件锁定）+ 专项恢复工具 + git 还原 + 纯净 dsh 协助兜底；从 2.0.0 起具备版本自动更新",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "dsh": ">=0.0.1",
+    "node": ">=20.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "skills": [
+      "./skills/dsh-git-rescue.md",
+      "./skills/dsh-boot-troubleshooting.md",
+      "./skills/dsh-clean-env.md",
+      "./skills/dsh-test-env.md",
+      "./skills/rescue-env-write-rule.md",
+      "./skills/dsh-git-rescue-refactor-requirements.md",
+      "./skills/dsh-git-rescue-codelevel-repair.md",
+      "./skills/dsh-dir-tree.md"
+    ]
+  },
+  "files": [
+    "lib",
+    "guardian",
+    "cordis.patch.yml",
+    "skills"
+  ],
+  "license": "MIT"
+}

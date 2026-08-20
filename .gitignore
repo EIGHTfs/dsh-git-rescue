@@ -1,0 +1,23 @@
+# 运行产物（绝不入库）
+node_modules/
+*.log
+*.pid
+
+# 测试残留（不入库）
+dsh-test-home/
+dsh-test-rc7/
+.analysis/
+guardian.log
+guardian-test-*.log
+
+# 本地状态
+.dsh-env-port
+*.bak
+# npm 下载产物（dsh-git-push 自动追加，2026-08-20）
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+npm-debug.log*
+.npm/
+.pnpm-store/

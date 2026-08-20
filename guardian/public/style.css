@@ -1,0 +1,124 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #12141a;
+  color: #e8e8ec;
+  min-height: 100vh;
+}
+
+.wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+h1 { font-size: 22px; font-weight: 700; }
+h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #b8bcc8; }
+
+.status-line { display: flex; align-items: center; gap: 10px; }
+
+.badge {
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.badge.running { background: rgba(48, 164, 108, .18); color: #30a46c; border: 1px solid rgba(48,164,108,.4); }
+.badge.stopped { background: rgba(240, 160, 60, .15); color: #f0a03c; border: 1px solid rgba(240,160,60,.35); }
+.badge.error { background: rgba(229, 72, 77, .18); color: #e5484d; border: 1px solid rgba(229,72,77,.4); }
+.badge.rollback { background: rgba(138, 99, 210, .18); color: #8a63d2; border: 1px solid rgba(138,99,210,.4); }
+.badge.unknown { background: rgba(140, 145, 160, .15); color: #8c91a0; border: 1px solid rgba(140,145,160,.3); }
+
+.card {
+  background: #1a1d26;
+  border: 1px solid #2a2e3a;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.btn {
+  cursor: pointer;
+  border: 1px solid #3a3f4d;
+  background: #232733;
+  color: #d8dbe2;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  transition: all .15s;
+}
+.btn:hover { background: #2c3140; border-color: #4a5164; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { border-color: #4176e6; color: #6d9bff; }
+.btn.ok { border-color: rgba(48,164,108,.5); color: #30a46c; }
+.btn.warn { border-color: rgba(240,160,60,.5); color: #f0a03c; }
+.btn.danger { border-color: rgba(229,72,77,.5); color: #e5484d; }
+.btn.small { padding: 4px 10px; font-size: 12px; margin-top: 10px; }
+
+.msg { margin-top: 10px; font-size: 12px; color: #8c91a0; min-height: 18px; }
+.msg.ok { color: #30a46c; }
+.msg.err { color: #e5484d; }
+
+.count { color: #8c91a0; font-weight: 400; font-size: 13px; }
+
+.list { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; }
+.empty { color: #6a6f7d; font-size: 13px; text-align: center; padding: 20px 0; }
+
+.snap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1f232f;
+  border: 1px solid #2a2e3a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.snap .id { font-family: monospace; color: #b8bcc8; flex: none; }
+.snap .meta { flex: 1; min-width: 0; color: #8c91a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snap .ops { display: flex; gap: 6px; flex: none; }
+.snap button {
+  cursor: pointer; border: none; background: transparent;
+  color: #8c91a0; font-size: 12px; padding: 3px 8px; border-radius: 5px;
+}
+.snap button:hover { background: #2c3140; color: #d8dbe2; }
+.snap button.restore { color: #30a46c; }
+.snap button.restore:hover { background: rgba(48,164,108,.15); }
+
+.log {
+  background: #12141a;
+  border: 1px solid #232733;
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.log .l { color: #8c91a0; }
+.log .l.info { color: #7ba4f0; }
+.log .l.warn { color: #f0a03c; }
+.log .l.error { color: #e5484d; }
+.log .l.ok { color: #30a46c; }
+
+/* ===== 2.0.0 新增：输入框 / 多选备份树 / 提示横幅 ===== */
+input[type=password], input[type=text] {
+  background: #12141a; border: 1px solid #3a3f4d; color: #e8e8ec;
+  border-radius: 8px; padding: 8px 12px; font-size: 13px;
+}
+input[type=password]:focus, input[type=text]:focus { border-color: #4176e6; outline: none; }
+.bs-tree { font-size: 12px; line-height: 1.8; max-height: 260px; overflow-y: auto; }
+.bs-tree label { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 1px 0; }
+.bs-tree label:hover { color: #6d9bff; }
+.bs-tree input[type=checkbox] { accent-color: #4176e6; cursor: pointer; }
+.flag { margin-top: 10px; font-size: 12px; padding: 6px 10px; border-radius: 8px; }
+.flag.warn { background: rgba(240,160,60,.12); color: #f0a03c; border: 1px solid rgba(240,160,60,.3); }

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSH Guardian - 救援面板</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🛡️ dsh-git-rescue Guardian</h1>
+      <div class="status-line">
+        <span id="dsh-status" class="badge unknown">检测中…</span>
+        <span id="auto-flag"></span>
+      </div>
+      <div id="restart-request-flag" class="flag warn" style="display:none"></div>
+      <div id="manual-stop-flag" class="flag warn" style="display:none"></div>
+    </header>
+
+    <section class="card">
+      <h2>手动控制</h2>
+      <div class="btn-row">
+        <button id="btn-check" class="btn">🔍 立即检查</button>
+        <button id="btn-start" class="btn ok">▶ 启动 DSH</button>
+        <button id="btn-stop" class="btn warn">⏹ 停止 DSH</button>
+        <button id="btn-recover" class="btn danger">↩ 手动救援（git 回退）</button>
+      </div>
+      <div id="action-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>🔑 远端认证（② GitHub token / SSH key）</h2>
+      <div id="auth-status" class="msg">读取中…</div>
+      <div class="btn-row">
+        <input id="token-input" type="password" placeholder="粘贴 GitHub token（仅本地保存，600 权限）">
+        <button id="btn-save-token" class="btn ok">保存 token</button>
+      </div>
+      <div id="auth-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>🛡️ 管理员密码（Windows 提权，开启 SSH 用）</h2>
+      <div id="admin-pw-status" class="msg">读取中…</div>
+      <div class="btn-row">
+        <input id="admin-pw-input" type="password" placeholder="填写 Windows 管理员密码（仅本机保存，600 权限，不进 git）">
+        <button id="btn-save-admin-pw" class="btn ok">保存密码</button>
+        <button id="btn-clear-admin-pw" class="btn warn">清除</button>
+      </div>
+      <div id="admin-pw-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>📦 web 多选备份（会话/skill 定向备份）</h2>
+      <div id="bs-status" class="msg">加载目录树…</div>
+      <div id="bs-tree" class="bs-tree"></div>
+      <div class="btn-row" style="margin-top:10px">
+        <button id="bs-select-all" class="btn small">全选</button>
+        <button id="bs-select-none" class="btn small">全不选</button>
+        <button id="bs-save" class="btn ok">💾 保存勾选</button>
+        <button id="bs-apply" class="btn primary">📝 应用 .gitignore</button>
+        <button id="bs-push" class="btn danger">🚀 推送备份</button>
+      </div>
+      <div id="bs-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>git 提交历史 <span id="git-count" class="count"></span></h2>
+      <div id="git-list" class="list"><div class="empty">加载中…</div></div>
+    </section>
+
+    <section class="card">
+      <h2>监控日志</h2>
+      <div id="log" class="log"><div class="empty">暂无日志</div></div>
+      <button id="btn-clear-log" class="btn small">清空日志显示</button>
+    </section>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
