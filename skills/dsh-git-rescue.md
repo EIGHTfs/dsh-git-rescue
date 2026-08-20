@@ -180,7 +180,8 @@ dsh-git-rescue/
 1. **import 冒烟必须做**：node --check 只查语法，查不出裸 `test` 类 ESM 加载崩溃（v1.19.0 事故根因）。部署前必须真实 `await import()` 验证 apply/inject（单测 T10 已固化）。
 2. **root 改配置后必须 chown**：任何用 root 修改 .dsh/profiles/web 配置（package.json/cordis.patch.yml）后，必须 `chown -R deepseek-harness + chmod 644`，否则 EACCES 拦启动（repair-tools 已新增 permission 工具自动修）。
 3. **高峰续跑需 peak-resume**：高峰时段（09-14）自动续跑被暂停（peak-hour-economy），崩溃恢复后要续跑中断会话需先 `peak-resume`。
-4. **OOM 隐藏根因**：数据写坏时启动吃满 Node 默认 2GB heap → SIGABRT。用 `NODE_OPTIONS=--max-old-space-size=4096`（runner 继承）——guardian 拉起 DSH 时应带此参数防 OOM 循环。
-5. **corrupt session log**：会话 header cwd 与目录编码不匹配（跨机导入/插件 tmp 会话）→ 按 DSH projectKey 规则移动目录或删除 tmp 会话。
+4. **OOM 隐藏根因**：数据写坏时启动吃满 Node 默认 2GB heap → SIGABRT。guardian 拉起 DSH 时带 `NODE_OPTIONS=--max-old-space-size=<自适应>` 防 OOM 循环——**2.4.0 起自适应**：物理内存 50%（下限 2048/上限 8192），env `DSH_MAX_OLD_SPACE` 可覆盖（替代硬编码 4096）。
+5. **OOM 崩溃 ≠ 配置故障（2.4.0 识别）**：OOM 此前被误判 `unknown` → 走 git 回退（无用）→ 拉起 → 又崩 → 死循环。2.4.0 起 fault-classify 识别 `oom` 类型：**跳过回退/坏点标记，记录内存诊断后直接拉起**（OOM 崩溃后进程已退出、内存已释放，拉起成功率最高）。status 暴露 `mem`/`oomProtection`，`git_rescue_status` 显示系统内存水位。
+6. **corrupt session log**：会话 header cwd 与目录编码不匹配（跨机导入/插件 tmp 会话）→ 按 DSH projectKey 规则移动目录或删除 tmp 会话。
 2026-08-20: 救援成功: 回退到 8674a61（fault=unknown, reason=无法判定故障类型，保守走 git 回退）
 2026-08-20: 救援成功: 回退到 ae17e1f（fault=unknown, reason=无法判定故障类型，保守走 git 回退）
