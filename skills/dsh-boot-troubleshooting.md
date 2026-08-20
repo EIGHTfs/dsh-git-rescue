@@ -43,6 +43,20 @@ dmesg | tail -60          # 找 I/O error / EXT4-fs error / Remounting filesyste
 
 > ⚠️ **`.dsh` 权限 600/700 是正常设计，不是故障**（2026-08-21 用户确认）：dsh-git-rescue 代码级把 `.dsh` 目录设为 700、敏感/状态文件（heartbeat、plugin-registry.json、rescue-scores、config.json、token、admin-password 等）设为 600——仅 owner 可读写是安全要求。排查启动失败/权限问题时，看到 600/700 属预期，**不要当 bug 修**；真正异常是「应该 600 却变 644/777」或「owner 不是运行用户」。
 
+## 二b、官方机制速查（源码实证，2026-08-21 通读官方包）
+
+> 完整设计理解见开发者文档 `DSH官方设计理解-权限专题-20260821.md`。以下为排查直接可用的官方行为。
+
+| 官方机制 | 源码行为 | 排查含义 |
+|---|---|---|
+| **软链回退** `healProfilesModuleFallback` | `$DSH_HOME/profiles/node_modules/` 一包一软链指向安装闭包；幂等（对就留/错就重建）；**真实目录直接抛 `exists and is not a symlink`**；Windows junction | 软链冲突 = 旧 hoisted 树残留 → 改名 `hoisted-bak-<ts>` 让引导自建；CIFS 不支持软链（ENOTSUP）→ 拷本地盘 |
+| **配置写原子化重试** | tmp+rename 仅重试 EACCES/EBUSY/EPERM（10 次 50ms）；**EROFS 立即失败不重试** | 只读卷启动失败是**立即暴露**的（写配置那步就炸），日志看 EROFS/Read-only 即系统层 |
+| **patch 损坏** | profile/home 的 `cordis.patch.yml` 解析失败、空文件、非数组 → **引导失败**；必须 `[]` 禁用层 | 手写坏 YAML patch 会导致启动失败（即使 DSH 有容错的场景是"合法 YAML 引用缺失插件"） |
+| **workspace unit header** | `dsh-storage-json` parse 阶段 header 缺失/非本域 → `missing or foreign unit header` → loader `failed to apply loader entry workspace` → 启动失败 | 崩溃日志该错 = workspace.json 损坏；文件缺失时 bootstrap 可从会话持久层重建（删除自愈） |
+| **credentials owner-only** | 读前校验 `(mode & 0o077) !== 0` → **抛错拒绝**（"run chmod 600"），不自动收紧 | 文件 644/777 时 DSH 拒绝启动（含 runner chmod -R 777 事故场景）→ chmod 600 修复 |
+| **`$DSH_WORKSPACE` env 不存在** | workspace 根 = runner 内部变量 + storage-json 配置 root（非 env） | 插件/脚本别依赖 `$DSH_WORKSPACE`；本机约定值 `/vol1/@appshare/DeepSeekHarness/workspace` 需显式传 |
+| **多进程无锁写** | storage 写入无跨进程锁 | 多实例同时写 workspace 有竞态；备份/恢复避开运行中实例写窗口 |
+
 ## 三、读历史会话日志定位报错（方法）
 
 - 会话文件 `~/.dsh/sessions/--<编码路径>--/<session-id>/session.jsonl.zstd` 是**拼接的 zstd 帧**（append 日志）：`node:zlib` 的 `zstdDecompressSync` 只解第一帧（只有 header 一行）。

@@ -365,6 +365,52 @@ console.log('== T16: OOM 识别 + 自适应 OOM 防护 ==')
   ok('readMemSummary 返回内存数字', typeof mem.totalMb === 'number' && mem.totalMb > 0 && typeof mem.freeMb === 'number')
 }
 
+// T17: 插件安装门禁闭环（2026-08-21 修正：新装插件标 pending 拦截，测试通过放行）
+console.log('== T17: 插件门禁（新装→pending 拦截→pass 放行） ==')
+{
+  const pg = await import('./lib/plugin-gate.js')
+  const tdir = await mkdtemp(join(tmpdir(), 'gitrescue-t17-'))
+  try {
+    const mainProfile = join(tdir, 'profiles', 'web')
+    await fs.mkdir(join(mainProfile, 'node_modules', 'plugin-a'), { recursive: true })
+    await fs.mkdir(join(mainProfile, 'node_modules', 'plugin-a', 'skills'), { recursive: true })
+    await fs.writeFile(join(mainProfile, 'node_modules', 'plugin-a', 'package.json'), JSON.stringify({ name: 'plugin-a', version: '1.0.0' }))
+    await fs.writeFile(join(mainProfile, 'node_modules', 'plugin-a', 'skills', 'plugin-a-skill.md'), '# plugin-a skill\n')
+    // cordis.patch.yml：plugin-a 新装 + plugin-old 存量
+    await fs.writeFile(join(mainProfile, 'cordis.patch.yml'), '- insert:\n  - id: plugin-a\n    name: plugin-a\n  - id: plugin-old\n    name: plugin-old\n')
+    // 存量 plugin-old 已在 registry passed
+    await pg.updatePluginStatus(tdir, { id: 'plugin-old', name: 'plugin-old', testEnv: 'passed' })
+    // ① 检测：plugin-a 无记录 = 新装（unregistered），plugin-old 有记录不报
+    const det = await pg.detectNewPlugins({ dshHome: tdir, mainProfile })
+    ok('检测出新装插件 plugin-a', det.newPlugins.some((p) => p.id === 'plugin-a'))
+    ok('存量 plugin-old 不报新装', !det.newPlugins.some((p) => p.id === 'plugin-old'))
+    // ② 复制 skills（源回退 node_modules → workspace；此处 node_modules 有）
+    const cp = await pg.copyPluginSkills(join(mainProfile, 'node_modules', 'plugin-a'), tdir)
+    ok('skills 复制到 .dsh/skills', cp.ok && (await fs.access(join(tdir, 'skills', 'plugin-a-skill.md')).then(() => true).catch(() => false)))
+    // ③ 新装插件标 pending → 拦截主环境重启
+    await pg.updatePluginStatus(tdir, { id: 'plugin-a', name: 'plugin-a', testEnv: 'pending' })
+    const gate1 = await pg.pendingPlugins({ dshHome: tdir, mainProfile })
+    ok('pending 插件阻止重启（blocked）', gate1.blocked === true && gate1.pending.some((p) => p.id === 'plugin-a'))
+    // ④ 测试通过放行 → 不再拦截
+    await pg.updatePluginStatus(tdir, { id: 'plugin-a', name: 'plugin-a', testEnv: 'passed' })
+    const gate2 = await pg.pendingPlugins({ dshHome: tdir, mainProfile })
+    ok('测试通过后放行重启（不拦截）', gate2.blocked === false)
+    // ⑤ registry 记录字段完整
+    const reg = await pg.readRegistry(tdir)
+    ok('registry 记录完整字段', reg.plugins['plugin-a']?.testEnv === 'passed' && !!reg.plugins['plugin-a']?.installedAt && !!reg.plugins['plugin-a']?.testedAt)
+    // ⑥ scan 流程整体：无记录 → pending（非 passed）——核心修正点
+    const det2 = await pg.detectNewPlugins({ dshHome: tdir, mainProfile })
+    // 模拟 scan 路由对无记录插件的处理（plugin-b 新出现）
+    await fs.writeFile(join(mainProfile, 'cordis.patch.yml'), '- insert:\n  - id: plugin-a\n    name: plugin-a\n  - id: plugin-old\n    name: plugin-old\n  - id: plugin-b\n    name: plugin-b\n')
+    const det3 = await pg.detectNewPlugins({ dshHome: tdir, mainProfile })
+    ok('新出现 plugin-b 被检测为 unregistered', det3.newPlugins.some((p) => p.id === 'plugin-b' && p.reason === 'unregistered'))
+    await pg.updatePluginStatus(tdir, { id: 'plugin-b', name: 'plugin-b', testEnv: 'pending' })
+    ok('plugin-b 标 pending 后拦截生效', (await pg.pendingPlugins({ dshHome: tdir, mainProfile })).blocked === true)
+  } finally {
+    await fs.rm(tdir, { recursive: true, force: true })
+  }
+}
+
 // ---------- 汇总（所有 T 完成后统一统计，2026-08-21 修复：原汇总在 T9 前导致 T9-T13 失败不退出） ----------
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }

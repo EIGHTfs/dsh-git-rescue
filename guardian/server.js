@@ -1394,18 +1394,21 @@ function startWeb() {
         const reg = await pg.readRegistry(CFG.dshHome)
         const results = []
         for (const p of det.newPlugins) {
-          // 存量信任：registry 无记录但插件早已安装（非本次新增）→ 默认 passed，不拦截
-          const pluginDir = join(mainProfile, 'node_modules_local', p.id)
-          const isKnown = reg.plugins?.[p.id] // 已有记录 → 按记录状态
+          // 存量信任：registry 已有记录 → 按记录状态（不覆盖存量 passed）
+          const isKnown = reg.plugins?.[p.id]
           if (isKnown) {
             results.push({ id: p.id, status: isKnown.testEnv || 'passed', note: 'registry 已有记录' })
             continue
           }
-          // 无记录：视为存量插件（首次扫描）→ 默认放行 passed；真正"刚装的新插件"由
-          // cordis.patch.yml 变更触发（recover 的"疑似插件安装事故"检测已覆盖回退场景）
+          // 无 registry 记录 = 新装插件（2026-08-21 用户确认修正）：
+          // 复制 skills 到本地 → 标 pending → 阻止主环境重启，直到测试环境测试通过放行。
+          // （存量插件在启用门禁时已批量登记，此后新增插件一律 pending，不再默认放行）
+          const nmLocal = join(mainProfile, 'node_modules_local', p.id)
+          const nm = join(mainProfile, 'node_modules', p.id)
+          const pluginDir = await fs.access(nmLocal).then(() => nmLocal).catch(() => nm)
           const cp = await pg.copyPluginSkills(pluginDir, CFG.dshHome).catch(() => ({ ok: false, copied: [] }))
-          await pg.updatePluginStatus(CFG.dshHome, { id: p.id, name: p.name, testEnv: 'passed' })
-          results.push({ id: p.id, skillsCopied: cp.copied, status: 'passed', note: '存量插件默认放行' })
+          await pg.updatePluginStatus(CFG.dshHome, { id: p.id, name: p.name, testEnv: 'pending' })
+          results.push({ id: p.id, skillsCopied: cp.copied, status: 'pending', note: '新装插件：待测试环境验证（测试通过后 /api/plugin-gate/pass 放行重启）' })
         }
         log(`插件门禁扫描: ${results.length ? results.map((r) => `${r.id}(${r.status})`).join('、') : '无变更'}`)
         return send(res, 200, { ok: true, scanned: results.length, results })
