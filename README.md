@@ -406,6 +406,7 @@ dsh-git-rescue/
 | 测试环境保护（test-home.js） | v1.11.0 独有（v2.0.0 误删） | ✅ 已修复（2026-08-21 上午：补回 isTestHomePath + guardian IS_TEST_HOME 闸门——测试实例崩溃不再误触发 git 回退全还原） |
 | 版本记录表（1.x 谱系） | v1.13.0 README | ✅ 已并入（见上节） |
 | 自更新卸载重装 | v2.0.0 已有 | ✅ 强化（代码级数据结构一致性判断：同大版本严重不一致也走 applyMajorUpgrade 卸载重装） |
+| **旧版迁移桥（v1.13.x → v2.x）** | 2026-08-21 新增 | ✅ v1.13.0 部署版 self-update 已加固：旧路径 `components/git-rescue/package.json` 404 时探测根级 → structureMismatch → **卸载重装**（整目录备份→清空→新结构原子就位→失败回滚）；端到端实测 1.13.0→2.1.0 成功 |
 
 **版本号**：合并后大版本数据结构未变（仍根级结构）→ 保持 2.x 线，本次合并为 2.1.0。
 
