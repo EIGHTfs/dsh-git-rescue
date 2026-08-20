@@ -411,6 +411,39 @@ console.log('== T17: 插件门禁（新装→pending 拦截→pass 放行） =='
   }
 }
 
+// T18: invalid plugin（apply 导出无效）纯代码检测（2026-08-21：不依赖 LLM，真实 import 冒烟）
+console.log('== T18: invalid-apply 检测（纯代码，防 invalid plugin 崩溃） ==')
+{
+  const ph = await import('./lib/plugin-health.js')
+  const tdir = await mkdtemp(join(tmpdir(), 'gitrescue-t18-'))
+  try {
+    const nm = join(tdir, 'profiles', 'web', 'node_modules')
+    // ① 正常插件：apply 是函数
+    await fs.mkdir(join(nm, 'plugin-ok'), { recursive: true })
+    await fs.writeFile(join(nm, 'plugin-ok', 'package.json'), JSON.stringify({ name: 'plugin-ok', version: '1.0.0', main: 'index.js' }))
+    await fs.writeFile(join(nm, 'plugin-ok', 'index.js'), 'export function apply(ctx) {}\n')
+    // ② invalid 插件：exports.apply = 对象（无 apply 方法）→ invalid plugin 崩溃根因
+    await fs.mkdir(join(nm, 'plugin-bad'), { recursive: true })
+    await fs.writeFile(join(nm, 'plugin-bad', 'package.json'), JSON.stringify({ name: 'plugin-bad', version: '1.0.0', main: 'index.js' }))
+    await fs.writeFile(join(nm, 'plugin-bad', 'index.js'), 'export const apply = {} // 应为 function，received object\n')
+    // ③ 语法错但导出错（裸 test 类）：export {} 无 apply
+    await fs.mkdir(join(nm, 'plugin-noapply'), { recursive: true })
+    await fs.writeFile(join(nm, 'plugin-noapply', 'package.json'), JSON.stringify({ name: 'plugin-noapply', version: '1.0.0', main: 'index.js' }))
+    await fs.writeFile(join(nm, 'plugin-noapply', 'index.js'), 'export const name = "x"\n')
+    const findings = await ph.scanPluginTree(tdir)
+    ok('正常插件不误报 invalid-apply', !findings.some((f) => f.plugin === 'plugin-ok'))
+    const bad = findings.find((f) => f.plugin === 'plugin-bad')
+    ok('apply=对象检出 invalid-apply', !!bad && bad.type === 'invalid-apply', JSON.stringify(bad))
+    const na = findings.find((f) => f.plugin === 'plugin-noapply')
+    ok('无 apply 导出检出 invalid-apply', !!na && na.type === 'invalid-apply', JSON.stringify(na))
+    // ④ checkApplyExport 直接校验
+    ok('checkApplyExport 正常插件=ok', (await ph.checkApplyExport(join(nm, 'plugin-ok', 'index.js'))) === 'ok')
+    ok('checkApplyExport invalid=非ok', (await ph.checkApplyExport(join(nm, 'plugin-bad', 'index.js'))) !== 'ok')
+  } finally {
+    await fs.rm(tdir, { recursive: true, force: true })
+  }
+}
+
 // ---------- 汇总（所有 T 完成后统一统计，2026-08-21 修复：原汇总在 T9 前导致 T9-T13 失败不退出） ----------
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }
