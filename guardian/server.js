@@ -789,10 +789,24 @@ async function recover(source = 'auto') {
 
     // 3.5) 插件树健康体检（合并自旧版拦截方案，2026-08-20）：
     //       git 回退后、拉起前体检——带病插件即使从 git 历史回退出来，也在拉起前被修掉（00:22 崩溃类型）
+    // 2026-08-21 增强：体检发现的问题插件（invalid plugin / client 声明无产物等）修复无效时，
+    //       优先备份式卸载并记录（plugin-error-uninstall-first skill：不反复修，先卸载恢复页面）
     try {
-      const { pluginTreeHealthCheck } = await import('../lib/plugin-health.js')
+      const { pluginTreeHealthCheck, uninstallProblemPlugin } = await import('../lib/plugin-health.js')
       const ph = await pluginTreeHealthCheck(CFG.dshHome)
-      if (ph.findings.length) log('warn', `插件树体检发现 ${ph.findings.length} 项: ${ph.findings.map((f) => f.detail).join('; ')}`)
+      if (ph.findings.length) {
+        log('warn', `插件树体检发现 ${ph.findings.length} 项: ${ph.findings.map((f) => f.detail).join('; ')}`)
+        // 体检后仍存在且修复无效的问题插件 → 备份式卸载（invalid plugin 类直接卸载）
+        for (const f of ph.findings) {
+          if (!f.plugin) continue
+          const un = await uninstallProblemPlugin(CFG.dshHome, f.plugin, { dryRun: false })
+          if (un.ok) {
+            log('warn', `⚠️ 问题插件已备份式卸载（${f.type}）: ${f.plugin} → ${un.backups?.join(',') || '已移走'}；记录见任务清单/留痕`)
+          } else {
+            log('warn', `⚠️ 问题插件卸载失败（${f.type}）: ${f.plugin} → ${un.detail}`)
+          }
+        }
+      }
       if (ph.fixes.length) log('warn', `插件树体检已修复 ${ph.fixes.length} 项（拉起前）`)
     } catch (e) { log('warn', `插件树体检失败（不影响拉起）: ${String(e?.message ?? e)}`) }
 
