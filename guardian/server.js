@@ -1181,6 +1181,13 @@ function startWeb() {
         res.setHeader('Content-Type', 'text/css; charset=utf-8')
         return res.end(css)
       }
+      if (path === '/inject.js') {
+        // 救援入口注入脚本（2026-08-21）：DSH 页面 <script src="http://<host>:3082/inject.js"></script>
+        // 轮询 /api/status，DSH 异常时页面弹横幅引导去救援面板
+        const js = await fs.readFile(new URL('./public/inject.js', import.meta.url))
+        res.setHeader('Content-Type', 'text/javascript; charset=utf-8')
+        return res.end(js)
+      }
       if (path === '/api/status') {
         return send(res, 200, {
           ok: true,
