@@ -366,6 +366,49 @@ dsh-git-rescue/
 | **web 快照面板（git 快照）** | ⏳ 待办（2026-08-20 EIGHTfs 提出，源自旧版「创建快照」入口）：新版 web 加「快照」面板——**手动创建快照 = git commit**（`chore(snapshot): manual`）、**快照列表 = git 提交历史**、**恢复 = git 回退**；不引入 zip 插件，与新版 git 体系一致 |
 | 旧版会话管理 unzip 覆盖方案重构 | ⏳ 最高优先级待办（此版本提交前不进行） |
 
+## 📜 版本记录（旧版谱系 1.x，保留自 v1.13.0 README）
+
+> X.Y.Z 语义：功能序号.修复次数。旧版为 components/git-rescue 单组件结构；2.0.0 起为根级单组件结构。
+
+| 版本 | 说明 |
+|------|------|
+| 1.13.0 | 功能13：3080 代理守护（guardian 探测 proxy 进程缺失自动拉起，GUARDIAN_PROXY_ENABLED=0 可关）+ 联动契约 skill（linkage/rescue-env-write/skill.git-push） |
+| 1.12.0 | 功能12：救援前插件自更新（guardian recover 开始前先 checkForUpdate，有新版则 applyUpdate 换新磁盘代码再救援——救援逻辑本身保持最新，避免旧版带病救人；测试环境同样允许，自更新≠自动救援；GUARDIAN_SELF_UPDATE=0 可关；任何失败不阻断救援 fail-soft；status 暴露 selfUpdate 开关） |
+| 1.11.0 | 功能11：测试环境不自动救援（guardian 探测 DSH_HOME 为 dsh-test-* 即禁用自动 git 回退/拉起，插件崩溃由开发者自行解决，现场保留 + 冷却）+ 活跃对话保护（救援前检测 running\|\|continueRunning，存在则落盘 restart-request.json 提交重启申请，不打断对话）+ 手动救援前记录近期变动文件（pre-restart-changes-*.json，默认 10 分钟窗口，防回退丢开发者刚写的文件） |
+| 1.10.0 | 功能10：测试环境路径判定（status.self.isTest，DSH_HOME 含 dsh-test-*）+ 沙盒环境能力检测（lib/sandbox.js：NoNewPrivs/CapEff/sudo 可行性/只读挂载，status 暴露 sandbox 字段） |
+| 1.9.0 | 功能9：测试环境入口整合（原 dsh-test-env-entry：侧边栏面板 + /api/dsh-test-env/*） |
+| 1.8.0 | 功能8：可选 sudo-key（插件配置，绝不明文显示/存储）——系统故障时 guardian 自动 remount rw 修复；无 root 环境不配置则保持"告警人工" |
+| 1.7.2 | 修复（严重/P0）：guardian 故障分类——系统只读/引导软链冲突判定为不可回退（停止无意义回退重启，防无限重启），仅插件配置变更才走 git 回退 |
+| 1.7.1 | 修复：guardian 插件安装事故识别（救援时 diff 插件配置，标注疑似装插件崩溃）+ 开机自启脚本 |
+| 1.7.0 | 功能7：救援积分（事件流权威防刷分，设备 ID 标识，未来排行榜） |
+| 1.6.0 | 功能6：异常感知增强——flapping 检测（无限重启识别+冷却）/ 业务就绪探活（假活识别）/ 现场捕获（stderr 落盘+TERM 追踪）/ sessions 基线+增量策略 |
+| 1.5.1 | 修复（严重）：接管式重启增加「超时后主动拉起」——手动启动的实例（如测试实例 dsh-test-instance.sh）kill 后无自动重拉，60s 未恢复则执行 DSH_START_CMD（默认测试实例脚本）主动拉起，再轮询 240s |
+| 1.5.0 | 功能5：会话恢复联动（session-manager 装了才调用 scan 续跑，没装跳过，不内置） |
+| 1.4.1 | 修复（严重）：接管式重启脚本不再 kill -9 runner（SIGKILL 触发 s6 退避，重拉延迟 15s→4min），只发 TERM；轮询窗口 150s→240s |
+| 1.4.0 | 功能4：接管式重启（独立脚本重启+验证，规避会话中断；配套 skill 档案） |
+| 1.3.0 | 功能3：自动更新（强制跟随 GitHub 最新稳定版，隐藏开关 env 可关） |
+| 1.2.2 | 修复：工具注册补 parameters（Agent 调用 git_rescue_* 整轮失败） |
+| 1.2.1 | 修复：备份仓名改用设备稳定指纹（machine-id），不再依赖主机名 |
+| 1.2.0 | 功能2 guardian 独立救援进程 |
+| 1.1.0 | 功能1 git 版本管理插件本体 |
+
+> 开发期修复的 bug（webServer 注册签名、tools output schema、bad 标记顺序、空仓 seed、ref 更新、软链推送）计入功能实现本身，Z 从发布后修复开始计数。
+
+## ✅ 2.1.0 合并（2026-08-21，v1.13.0 ⇄ v2.0.0 功能合并）
+
+**策略（用户确立）**：以 v2.0.0 重构版为代码基底，按重构同款要求把旧版 v1.13.0 独有功能合并回来；README 以旧版为底保留图文/架构图/分版本功能表，再追加重构版内容。
+
+| 合并项 | 来源 | 状态 |
+|--------|------|------|
+| 救援积分（scores.js） | v1.13.0 独有 | ✅ 已合并（lib/scores.js，事件流权威防刷分，status 暴露 scores） |
+| 沙盒能力检测（sandbox.js） | v1.13.0 独有 | ✅ 已合并（lib/sandbox.js：NoNewPrivs/CapEff/sudo/只读挂载，status 暴露 sandbox） |
+| 会话恢复联动（linkSessionRecovery） | v1.13.0 独有 | ✅ 已合并（崩溃检测后自动 scan 续跑 + POST /api/git-rescue/link-session-recovery + git_rescue_link_recovery 工具；session-link.js 两版一致直接复用） |
+| 测试环境保护（test-home.js） | v1.11.0 独有（v2.0.0 误删） | ✅ 已修复（2026-08-21 上午：补回 isTestHomePath + guardian IS_TEST_HOME 闸门——测试实例崩溃不再误触发 git 回退全还原） |
+| 版本记录表（1.x 谱系） | v1.13.0 README | ✅ 已并入（见上节） |
+| 自更新卸载重装 | v2.0.0 已有 | ✅ 强化（代码级数据结构一致性判断：同大版本严重不一致也走 applyMajorUpgrade 卸载重装） |
+
+**版本号**：合并后大版本数据结构未变（仍根级结构）→ 保持 2.x 线，本次合并为 2.1.0。
+
 ## 🔗 联动与源码地址
 
 ### 联动：自动续跑全局闸门（dsh-git-rescue ⇄ dsh-session-manager）

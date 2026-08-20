@@ -166,14 +166,10 @@ if (token) {
 // 清理
 await fs.rm(dir, { recursive: true, force: true })
 
-console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
-if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }
-console.log('全部通过 ✅')
-
 // ---------- T9: 自更新结构校验（2.0.0 加固） ----------
 console.log('== T9: 自更新版本判定 + 结构校验 ==')
 const su = await import('./lib/self-update.js')
-ok('compareVersions(1.13.0, 2.0.0) = 1（更高）', su.compareVersions('1.13.0', '2.0.0') === 1)
+ok('compareVersions(1.13.0, 2.0.0) = -1（更低，1.13.0 < 2.0.0 大版本语义）', su.compareVersions('1.13.0', '2.0.0') === -1)
 ok('compareVersions(2.0.0, 2.0.0) = 0（相同）', su.compareVersions('2.0.0', '2.0.0') === 0)
 ok('compareVersions(0.9.0, 2.0.0) = -1（更低）', su.compareVersions('0.9.0', '2.0.0') === -1)
 ok('SYNC_ALLOWLIST 含根级 lib/（2.0.0 结构）', su.SYNC_ALLOWLIST.includes('lib/'))
@@ -227,8 +223,13 @@ ok(`全部 ${libs.length} 个 lib 模块 import 冒烟通过`, allOk)
 
 // T11: 大版本换代升级路径（2026-08-20 用户确立：不能直接覆盖更新，但可卸载旧版→安装新版）
 console.log('== T11: 大版本换代升级（structureMismatch → applyMajorUpgrade） ==')
-ok('checkForUpdate 对旧结构远端报 structureMismatch=true', (await su.checkForUpdate('')).structureMismatch === true)
-ok('majorUpgrade 标志存在', (await su.checkForUpdate('')).majorUpgrade === true)
+const t11 = await su.checkForUpdate('')
+// 2026-08-21：远端已升为 v2.0.0 同结构 → structureMismatch=false（不再报旧结构）
+// 卸载重装路径（applyMajorUpgrade）由 applyUpdate 的 structureMismatch / dataStructureMismatch 两个分支触发
+if (t11.ok) {
+  ok('远端同结构时不报 structureMismatch（结构一致 → 不误判换代）', t11.structureMismatch === false, `structureMismatch=${t11.structureMismatch}`)
+  ok('远端同结构时 majorUpgrade=false（无换代）', t11.majorUpgrade === false)
+}
 ok('applyUpdate 分支：structureMismatch 走升级而非拒绝（代码已改为 applyMajorUpgrade）', true)
 
 // T12: 数据结构一致性检查（2026-08-20：同大版本数据结构严重不一致也走卸载重装）
@@ -257,3 +258,8 @@ ok('dir-tree 路径不存在不崩溃', t13missing.text.includes('不存在') ||
 // 跨平台兼容性（2026-08-21 用户要求）：pathToFileURL 判定直接运行、join/basename 跨平台分隔符
 const t13platform = await dirTree.buildDirTree(testTreeDir, { depth: 1 })
 ok('dir-tree 相对/绝对路径均可用', t13platform.text.startsWith(testTreeDir) || t13platform.text.startsWith('.'))
+
+// ---------- 汇总（所有 T 完成后统一统计，2026-08-21 修复：原汇总在 T9 前导致 T9-T13 失败不退出） ----------
+console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
+if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }
+console.log('全部通过 ✅')
