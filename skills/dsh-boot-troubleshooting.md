@@ -53,7 +53,7 @@ dmesg | tail -60          # 找 I/O error / EXT4-fs error / Remounting filesyste
 | **配置写原子化重试** | tmp+rename 仅重试 EACCES/EBUSY/EPERM（10 次 50ms）；**EROFS 立即失败不重试** | 只读卷启动失败是**立即暴露**的（写配置那步就炸），日志看 EROFS/Read-only 即系统层 |
 | **patch 损坏** | profile/home 的 `cordis.patch.yml` 解析失败、空文件、非数组 → **引导失败**；必须 `[]` 禁用层 | 手写坏 YAML patch 会导致启动失败（即使 DSH 有容错的场景是"合法 YAML 引用缺失插件"） |
 | **workspace unit header** | `dsh-storage-json` parse 阶段 header 缺失/非本域 → `missing or foreign unit header` → loader `failed to apply loader entry workspace` → 启动失败 | 崩溃日志该错 = workspace.json 损坏；文件缺失时 bootstrap 可从会话持久层重建（删除自愈） |
-| **credentials owner-only** | 读前校验 `(mode & 0o077) !== 0` → **抛错拒绝**（"run chmod 600"），不自动收紧 | 文件 644/777 时 DSH 拒绝启动（含 runner chmod -R 777 事故场景）→ chmod 600 修复 |
+| **credentials owner-only** | 读前校验 `(mode & 0o077) !== 0` → **抛错拒绝**（"run chmod 600"），不自动收紧 | 文件 644/777 时 DSH 拒绝启动（fnOS 曾出 chmod -R 777 事故 → 无限重启）→ 用 runner `secureDshTree` 同款递归收紧 `.dsh`（**目录 700/文件 600/跳软链**防破坏 profiles/node_modules） |
 | **`$DSH_WORKSPACE` env 不存在** | workspace 根 = runner 内部变量 + storage-json 配置 root（非 env） | 插件/脚本别依赖 `$DSH_WORKSPACE`；本机约定值 `/vol1/@appshare/DeepSeekHarness/workspace` 需显式传 |
 | **多进程无锁写** | storage 写入无跨进程锁 | 多实例同时写 workspace 有竞态；备份/恢复避开运行中实例写窗口 |
 
