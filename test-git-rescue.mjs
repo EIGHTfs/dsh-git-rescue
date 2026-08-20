@@ -235,7 +235,8 @@ ok('applyUpdate 分支：structureMismatch 走升级而非拒绝（代码已改�
 // T12: 数据结构一致性检查（2026-08-20：同大版本数据结构严重不一致也走卸载重装）
 console.log('== T12: 数据结构一致性 ==')
 const fs12 = await import('node:fs')
-const root12 = process.cwd()
+import { fileURLToPath } from 'node:url'
+const root12 = fileURLToPath(new URL('.', import.meta.url)) // 插件目录，fileURLToPath 正确处理中文路径
 const pkg12 = JSON.parse(fs12.readFileSync(join(root12, 'package.json'), 'utf8'))
 const main12 = pkg12.main || 'lib/index.js'
 ok('main 指向存在', fs12.existsSync(join(root12, main12)))
@@ -294,6 +295,74 @@ console.log('== T14: restoreProfileOnly 只还原配置、不覆盖数据 ==')
   } finally {
     await fs.rm(tdir, { recursive: true, force: true })
   }
+}
+
+// T15: 原子写 + 权限守卫（2026-08-21 对齐官方 dsh-atomic-write / dsh-credentials-local）
+console.log('== T15: atomic.js 原子写 + 权限守卫（对齐官方） ==')
+{
+  const tdir = await mkdtemp(join(tmpdir(), 'gitrescue-t15-'))
+  try {
+    const atomic = await import('./lib/atomic.js')
+    const secret = join(tdir, 'secret.txt')
+    // 原子写：权限 600 + 内容正确 + 无 tmp 残留
+    await atomic.writeFileAtomic(secret, 'hello\n')
+    const st1 = await fs.stat(secret)
+    ok('原子写权限 600', (st1.mode & 0o777) === 0o600, `mode=${(st1.mode & 0o777).toString(8)}`)
+    ok('原子写内容正确', (await fs.readFile(secret, 'utf8')) === 'hello\n')
+    ok('无 tmp 残留', (await fs.readdir(tdir)).filter((x) => x.includes('.tmp')).length === 0)
+    // 替换宽权限文件 → 新 inode 收窄为 600
+    await fs.writeFile(secret, 'wide\n', { mode: 0o644 })
+    await atomic.writeFileAtomic(secret, 'narrow\n')
+    const st2 = await fs.stat(secret)
+    ok('替换后权限收窄 600', (st2.mode & 0o777) === 0o600)
+    // checkOwnerOnly：644 过宽 / 600 正常
+    await fs.chmod(secret, 0o644)
+    const c1 = await atomic.checkOwnerOnly(secret)
+    ok('644 判过宽', !c1.ok, JSON.stringify(c1))
+    await fs.chmod(secret, 0o600)
+    const c2 = await atomic.checkOwnerOnly(secret)
+    ok('600 判正常', c2.ok)
+    // readFileSecure：过宽自动收紧
+    await fs.chmod(secret, 0o644)
+    const content = await atomic.readFileSecure(secret)
+    const st3 = await fs.stat(secret)
+    ok('readFileSecure 自动收紧 600', (st3.mode & 0o777) === 0o600)
+    ok('readFileSecure 返回内容', content.trim() === 'narrow')
+    // withFileLock：并发写不丢数据
+    const counter = join(tdir, 'counter.txt')
+    await atomic.writeFileAtomic(counter, '0\n')
+    await Promise.all(Array.from({ length: 10 }, async () => {
+      await atomic.withFileLock(counter, async () => {
+        const v = parseInt((await fs.readFile(counter, 'utf8')).trim(), 10)
+        await atomic.writeFileAtomic(counter, String(v + 1) + '\n')
+      })
+    }))
+    ok('写锁 10 次并发计数 = 10', (await fs.readFile(counter, 'utf8')).trim() === '10')
+  } finally {
+    await fs.rm(tdir, { recursive: true, force: true })
+  }
+}
+
+// T16: OOM 故障识别 + 自适应堆上限（2026-08-21：用户实测"内存崩了好几次"）
+console.log('== T16: OOM 识别 + 自适应 OOM 防护 ==')
+{
+  const fc = await import('./lib/fault-classify.js')
+  // OOM 判定（fault-classify 新增 oom 类型）
+  ok('V8 heap OOM 判定 oom', fc.classifyFault({ bootHints: 'FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory' }).type === 'oom')
+  ok('SIGABRT 判定 oom', fc.classifyFault({ bootHints: 'SIGABRT' }).type === 'oom')
+  ok('系统 OOM killer 判定 oom', fc.classifyFault({ systemHints: 'Out of memory: Kill process' }).type === 'oom')
+  ok('普通模块缺失不误判 oom', fc.classifyFault({ bootHints: 'Error: Cannot find module' }).type !== 'oom')
+  ok('配置变更且无 OOM 特征仍判 plugin', fc.classifyFault({ pluginConfigChanged: true, bootHints: 'Error: Cannot find module' }).type === 'plugin')
+  ok('系统只读优先于 OOM（读-写特征不同）', fc.classifyFault({ systemHints: 'Remounting filesystem read-only' }).type === 'system')
+  // computeMaxOldSpace 自适应
+  ok('8GB 机器 → 50% = 4096', fc.computeMaxOldSpace(8192) === '--max-old-space-size=4096')
+  ok('4GB 机器 → 下限 2048', fc.computeMaxOldSpace(4096) === '--max-old-space-size=2048')
+  ok('64GB 机器 → 上限 8192', fc.computeMaxOldSpace(65536) === '--max-old-space-size=8192')
+  ok('env DSH_MAX_OLD_SPACE=8192 覆盖', fc.computeMaxOldSpace(8192, '8192') === '--max-old-space-size=8192')
+  ok('env 非法值回落默认', fc.computeMaxOldSpace(8192, 'abc') === '--max-old-space-size=4096')
+  // readMemSummary
+  const mem = fc.readMemSummary()
+  ok('readMemSummary 返回内存数字', typeof mem.totalMb === 'number' && mem.totalMb > 0 && typeof mem.freeMb === 'number')
 }
 
 // ---------- 汇总（所有 T 完成后统一统计，2026-08-21 修复：原汇总在 T9 前导致 T9-T13 失败不退出） ----------

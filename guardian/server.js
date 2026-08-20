@@ -1,5 +1,5 @@
 /**
- * dsh-git-rescue 2.0.0 guardian — 独立守护进程（③⑤⑥⑦）
+ * dsh-git-rescue 2.4.0 guardian — 独立守护进程（③⑤⑥⑦）
  *
  * 独立于 DSH 运行（DSH 崩了它照样活着）。功能：
  * 1. 定时健康检查 DSH（GET http://<host>:<port>）
@@ -22,10 +22,12 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import http from 'node:http'
 import { runGit, commit, headRef, markBad, lastGoodCommit, hardReset, restoreProfileOnly } from '../lib/git.js'
+// 2026-08-21 对齐官方权限设计：原子写 + 敏感文件权限守卫
+import { writeFileAtomic, readFileSecure } from '../lib/atomic.js'
 import { createFlappingDetector } from '../lib/flapping.js'
 import { probeDshHealth } from '../lib/probe.js'
 import { startDshWithLog, captureExitContext, readLogTail } from '../lib/process-capture.js'
-import { classifyFault, probeSystemHints } from '../lib/fault-classify.js'
+import { classifyFault, probeSystemHints, computeMaxOldSpace, readMemSummary } from '../lib/fault-classify.js'
 import { isRescueEnv, startRescueEnv, rescueEnvStatus, rescueEnvName } from '../lib/rescue-env.js'
 import { isTestHomePath } from '../lib/test-home.js'
 import { runRepairTools } from '../lib/repair-tools.js'
@@ -183,10 +185,12 @@ function startDsh() {
   log('info', `启动 DSH: ${cmd}`)
   fs.mkdir(join(CFG.dshHome, 'git-rescue'), { recursive: true }).catch(() => {})
   // 防 OOM（2026-08-20 救援教训）：数据写坏时启动吃满 Node 默认 2GB heap → SIGABRT。
-  // NODE_OPTIONS 由 spawn 环境继承，--max-old-space-size=4096 防启动期 OOM 循环。
+  // 2026-08-21 升级为自适应：按物理内存 50%（下限 2048 / 上限 8192），env DSH_MAX_OLD_SPACE 可覆盖。
+  // NODE_OPTIONS 由 spawn 环境继承，--max-old-space-size 防启动期 OOM 循环。
+  const memOpt = computeMaxOldSpace()
   const child = startDshWithLog(cmd, {
     logFile: STDERR_FILE,
-    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || '--max-old-space-size=4096' },
+    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || memOpt },
   })
   if (!child) {
     log('error', `DSH spawn 失败: ${cmd}`)
@@ -511,13 +515,13 @@ async function recordPreRestartChanges() {
 
 // ============ 救援前插件自更新（从 2.0.0 起具备） ============
 
-/** 读取 GitHub token：data/sensitive/github-token（新约定）优先，git-rescue/token 回退。 */
+/** 读取 GitHub token：data/sensitive/github-token（新约定）优先，git-rescue/token 回退。权限过宽自动收紧（2026-08-21 对齐官方）。 */
 async function readTokenForUpdate() {
   try {
-    const t = (await fs.readFile(join(CFG.workspace, 'data', 'sensitive', 'github-token'), 'utf8')).trim()
+    const t = (await readFileSecure(join(CFG.workspace, 'data', 'sensitive', 'github-token'), 'utf8')).trim()
     if (t) return t
   } catch { /* 回退旧路径 */ }
-  try { return (await fs.readFile(join(CFG.dshHome, 'git-rescue', 'token'), 'utf8')).trim() } catch { return '' }
+  try { return (await readFileSecure(join(CFG.dshHome, 'git-rescue', 'token'))).trim() } catch { return '' }
 }
 
 /** 探测 SSH key 是否可用（~/.ssh 下存在非空 id_* key）。 */
@@ -560,7 +564,7 @@ async function authStatus() {
 async function saveToken(token) {
   const dir = join(CFG.workspace, 'data', 'sensitive')
   await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(join(dir, 'github-token'), String(token).trim(), { mode: 0o600 })
+  await writeFileAtomic(join(dir, 'github-token'), String(token).trim())
   return { ok: true }
 }
 
@@ -680,6 +684,31 @@ async function recover(source = 'auto') {
       state.flappingCooldownUntil = Date.now() + CFG.flappingWindowMs
       state.dsh = 'stopped'
       return { ok: false, testEnv: IS_TEST_HOME, rescueEnv: IS_RESCUE_HOME, blocked: IS_TEST_HOME ? 'test-env-no-rescue' : 'rescue-env-no-rescue', error: `${IS_TEST_HOME ? '测试环境' : '救援环境'}不自动救援（崩溃由开发者自行解决）` }
+    }
+
+    // 0.05) OOM 故障（2026-08-21 新增）：git 回退无意义（内存问题不是配置问题），
+    //       崩溃后进程已退出、内存已释放 → 记录内存诊断后直接拉起（不回退、不标记 bad）。
+    //       由 tick 的 !recoverable 分支特判进入（fault.type === 'oom'）。
+    if (faultInfo.type === 'oom') {
+      const mem = readMemSummary()
+      log('error', `⛔ OOM 内存不足——跳过 git 回退（回退无意义），直接拉起。内存: ${mem.detail}`)
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'oom-detected', mem, msg: faultInfo.reason }) + '\n').catch(() => {})
+      // 更新 NODE_OPTIONS 生效：若之前已用旧上限拉起过，内存诊断时点显式记录
+      log('info', `  OOM 防护: ${computeMaxOldSpace()}（env DSH_MAX_OLD_SPACE 可覆盖）`)
+      state.manualStop = false
+      startDsh()
+      const deadline = Date.now() + CFG.startWaitMs
+      let ok = false
+      while (Date.now() < deadline) {
+        const p = await probeDsh()
+        if (p.ok) { ok = true; break }
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+      state.lastRecoveryResult = { ok, oom: true, at: new Date().toISOString() }
+      state.lastRecoveryAt = Date.now()
+      state.dsh = ok ? 'running' : 'stopped'
+      log(ok ? 'info' : 'warn', `OOM 后拉起: ${ok ? '✅ DSH 恢复正常（内存已释放）' : '❌ 仍失败——请人工释放内存（清理其他进程/加内存）后重试'}`)
+      return { ok, oom: true, mem, error: ok ? undefined : 'OOM 拉起失败，需人工释放内存' }
     }
 
     // 0.1) 存在进行中活跃对话 → 不重启，提交重启申请
@@ -1071,6 +1100,12 @@ async function tick() {
       state.lastFault = fault
       state.lastFaultReason = fault.reason || ''
       if (!fault.recoverable) {
+        if (fault.type === 'oom') {
+          // OOM 特判（2026-08-21）：不可回退，但 recover 内部有 OOM 分支——跳过 git 回退直接拉起
+          state.failCount = 0
+          await recover()
+          return
+        }
         if (fault.type === 'system') {
           const fixed = await trySystemFixWithSudo()
           if (fixed.ok) {
@@ -1154,6 +1189,8 @@ function startWeb() {
           selfUpdate: { enabled: CFG.selfUpdate, autoUpdateEnabled: AUTO_UPDATE_ENABLED },
           auth: await authStatus(),
           restartRequest: await readRestartRequest(),
+          mem: readMemSummary(),
+          oomProtection: computeMaxOldSpace(),
           state: {
             dsh: state.dsh, proxy: state.proxy, lastOkAt: state.lastOkAt, lastErrorAt: state.lastErrorAt,
             failCount: state.failCount, lastRecoveryAt: state.lastRecoveryAt,

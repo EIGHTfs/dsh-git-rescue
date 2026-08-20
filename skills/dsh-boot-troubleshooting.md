@@ -41,6 +41,8 @@ dmesg | tail -60          # 找 I/O error / EXT4-fs error / Remounting filesyste
 | `Failed to load plugins`（白屏） | 客户端 | 同上（客户端 cordis） | 同上 |
 | `Cannot find package` | 依赖 | 残留引用/缺包 | grep 清残留 |
 
+> ⚠️ **`.dsh` 权限 600/700 是正常设计，不是故障**（2026-08-21 用户确认）：dsh-git-rescue 代码级把 `.dsh` 目录设为 700、敏感/状态文件（heartbeat、plugin-registry.json、rescue-scores、config.json、token、admin-password 等）设为 600——仅 owner 可读写是安全要求。排查启动失败/权限问题时，看到 600/700 属预期，**不要当 bug 修**；真正异常是「应该 600 却变 644/777」或「owner 不是运行用户」。
+
 ## 三、读历史会话日志定位报错（方法）
 
 - 会话文件 `~/.dsh/sessions/--<编码路径>--/<session-id>/session.jsonl.zstd` 是**拼接的 zstd 帧**（append 日志）：`node:zlib` 的 `zstdDecompressSync` 只解第一帧（只有 header 一行）。

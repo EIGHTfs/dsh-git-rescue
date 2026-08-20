@@ -27,7 +27,7 @@
 | git 还原恢复 | v2.0.0 | 故障分类 → 保留现场 → 坏点标记 → reset 到好提交 → 拉起 → 自检 |
 | 纯净 dsh 协助兜底 | v2.0.0 | 无法恢复时唤起 Save-clean，纯净 dsh 加载插件 skills 目录协助 |
 | **自动更新** | v2.0.0 | 强制跟随 GitHub 最新稳定版 + **大版本换代升级**（卸载旧版→安装新版，代码级判断） |
-| guardian 守护 | v2.0.0 | 独立进程探活 + git 回退 + 拉起 + 自检（坏点标记防死循环）+ OOM 防护 + peak-resume |
+| guardian 守护 | v2.0.0 | 独立进程探活 + git 回退 + 拉起 + 自检（坏点标记防死循环）+ OOM 防护（自适应，env 可覆盖）+ OOM 故障识别（跳过无用回退直接拉起）+ peak-resume |
 | 插件树健康体检 | 合并自旧版 | plugin-health：声明/产物一致性检查（00:22 崩溃类型），拉起前自动修复 |
 | 会话恢复联动 | 合并自旧版 | 崩溃后自动调 session-manager 续跑中断会话（装了才调）**+ 自动续跑全局闸门**：DSH 刚启动默认关闭续跑（防崩溃恢复后批量建空壳），用户手动开启或第一次手动对话后自动放行 |
 | 接管式重启 | 合并自旧版 | 独立脚本 TERM→轮询恢复→验证，会话中断也能安全完成 |
@@ -425,6 +425,45 @@ dsh-git-rescue/
 | 现网一次性修正 | .dsh 仓库 sessions(131)/.credentials.yaml/git-rescue 等 140 文件解除跟踪（commit 45d2def），工作区数据完整保留 |
 
 **语义**：完整备份（commit 快照）不变；崩溃回退只把配置/插件恢复到好提交，会话与注册表数据保持现状——救援不再"顺手覆盖"数据。
+
+## ✅ 2.3.0 官方权限设计对齐（2026-08-21）
+
+**背景**：系统研究 DeepSeek Harness 官方设计（196 个官方包源码 + 架构/sandbox/credentials/CLI 文档）后，把官方权限约定落实到本插件。
+
+**官方关键设计（已核实源码）**：
+- `.credentials.yaml` / `settings.yaml` 写时**强制目录 0700（mode 448）+ 文件 0600（mode 384）**（dsh-credentials-local / dsh-settings-file）
+- 读取凭据前校验权限过宽（`GROUP_OTHER_BITS=0o077`），过宽**抛错拒绝**（"run chmod 600"）——官方强制 owner-only
+- 原子写（dsh-atomic-write）：随机后缀临时文件 `wx` 独占创建 + 同目录 `rename` 原子替换，权限随新 inode 收窄（替换宽权限文件无 chmod 竞态）；写锁 `<file>.lock` wx 创建 + 指数退避 + 2s 超时
+- 官方 `.dsh` **根目录本身不强制 chmod**，约束施加于凭据/设置/原子写等局部（用户确认：`.dsh` 权限 600/700 是正常设计）
+
+**本插件落地**：
+
+| 项 | 改动 |
+|----|------|
+| `lib/atomic.js`（新增） | `writeFileAtomic`（wx+rename 原子写，mode 600/dirMode 700）+ `withFileLock`（跨进程写锁）+ `checkOwnerOnly`/`readFileSecure`（读取前校验权限过宽，过宽自动收紧 600——守护进程场景友好模式，非官方抛错拒绝） |
+| 敏感文件写入统一原子写 | config.json / token / admin-password / heartbeat / rescue-scores / device 等全部改 `writeFileAtomic`（原 `fs.writeFile mode:0o600` 非原子） |
+| 敏感文件读取统一守卫 | readToken / readTokenForUpdate 改 `readFileSecure`（权限过宽自动 chmod 600 后继续） |
+| 测试 | T15 新增 9 断言（原子写权限/收窄/无残留/过宽判定/自动收紧/并发写锁），全套 72 通过 0 失败 |
+
+**版本**：2.2.0 → 2.3.0。
+
+## ✅ 2.4.0 OOM 故障识别与自适应防护（2026-08-21，用户实测"内存崩了好几次"）
+
+**背景**：本机 8.7GB 内存，DSH 主实例 RSS 常驻 ~3GB（33%），可用内存紧张。此前 OOM 崩溃被 `classifyFault` 误判为 `unknown` → **走 git 回退（对内存问题毫无作用）→ 拉起 → 又崩 → 死循环**（flapping 冷却只能暂缓，不解决根因）。本次把 OOM 从"误当配置故障回退"改为"识别 + 直接拉起 + 内存诊断"。
+
+| 项 | 改动 |
+|----|------|
+| `lib/fault-classify.js` 新增 `oom` 故障类型 | 识别 V8 heap OOM / FATAL ERROR / SIGABRT / 系统 oom-killer / Out of memory，标记 `recoverable:false`（回退无意义） |
+| `guardian/server.js` `recover()` OOM 分支 | `faultInfo.type==='oom'` → **跳过 git 回退/坏点标记**，记录内存诊断后直接拉起（OOM 崩溃后进程已退出、内存已释放，拉起成功率最高） |
+| `tick()` oom 特判 | `!recoverable` 分支新增 `fault.type==='oom'` → 走 `recover()` 而非"停止自动救援" |
+| OOM 防护自适应 | `computeMaxOldSpace()`（`lib/fault-classify.js`）：默认物理内存 50%（下限 2048 / 上限 8192），env `DSH_MAX_OLD_SPACE` 可覆盖（用户"加大/调上限"诉求的落地口），替代硬编码 4096 |
+| 内存可见性 | guardian `/api/status` 暴露 `mem`（totalMb/freeMb/usedMb/detail）+ `oomProtection`（当前生效的堆上限）；插件 `git_rescue_status` / `/api/git-rescue/status` 暴露 `mem` |
+| 事件记录 | OOM 检出写 `oom-detected` 事件（含内存快照），供事后复盘 |
+| 测试 | T16 新增 12 断言（OOM 判定 6 项不误判 + 自适应计算 5 项 + readMemSummary），全套 **86 通过 0 失败** |
+
+**为什么"不限制内存"不可行**：Node 没有无限堆选项（`--max-old-space-size` 必须给具体 MB，设 0 回落默认）；且本机总内存仅 8.7GB、可用常驻紧张——堆上限设太大反而让 DSH 抢占更多内存，**更快触发系统 OOM killer**。正确姿势：按物理内存自适应（50%），必要时 `DSH_MAX_OLD_SPACE=8192` 显式加大，同时留意系统整体内存水位（`git_rescue_status` 已显示）。
+
+**版本**：2.3.0 → 2.4.0。
 
 ## 🔗 联动与源码地址
 

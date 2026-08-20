@@ -1,7 +1,7 @@
 {
   "name": "dsh-git-rescue",
-  "version": "2.2.0",
-  "description": "DSH 救援恢复插件（2.2.0：还原只还原 profile 不覆盖数据目录）：守护进程 + .dsh git 仓库管理 + 远端备份（token/SSH）+ 救援环境 + 专项工具 + git 还原（配置类路径，sessions/storages 数据不被覆盖）+ 纯净 dsh 协助兜底 + 自动更新（大版本/结构不一致卸载重装）",
+  "version": "2.4.0",
+  "description": "DSH 救援恢复插件（2.4.0：OOM 故障识别与自适应防护——OOM 崩溃跳过无用 git 回退直接拉起，堆上限按物理内存自适应 env 可覆盖）：守护进程 + .dsh git 仓库管理 + 远端备份（token/SSH）+ 救援环境 + 专项工具 + git 还原（只还原 profile）+ 插件安装门禁 + 自动更新（大版本/结构不一致卸载重装）",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
