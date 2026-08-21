@@ -97,7 +97,7 @@ if (mid) ok('machine-id 优先（source=machine-id）', device.source === 'machi
 else ok('machine-id 不可用，走持久化兜底', device.source === 'persisted')
 const backupInfo = await defaultBackupRepo(dir)
 const repoName = backupInfo.repo
-ok('备份仓名格式正确', repoName.startsWith('.dsh@'), `repo=${repoName}`)
+ok('备份仓名格式正确（固定 dsh-git-rescue-backup）', repoName === 'dsh-git-rescue-backup', `repo=${repoName}`)
 const hn = hostname().replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
 ok('备份仓名不含主机名（hostname 撞车不影响）', hn.length === 0 || !repoName.includes(hn), `repo=${repoName} hostname=${hn}`)
 

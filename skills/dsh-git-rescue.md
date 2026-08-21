@@ -44,7 +44,8 @@ dsh-git-rescue/
 
 | 版本 | 内容 |
 |------|------|
-| 2.0.0 | **完全重构（大版本换代）**：纯救援定位——仅保留守护进程 + git 仓库恢复。① .dsh 单仓库管理（会话/skill 不丢）② 远端私有库 `.dsh@<dsh版本>.<设备ID>`（token/SSH 双方案）③ 开机自启（命令在 .dsh 目录层）④ 救援环境 `<版本>@Save-clean/@Save-test` + save-lock 防装插件 ⑤ 专项恢复工具（repair-tools：plugin_config/boot_symlink/ro_volume/plugin_load）⑥ git 还原 ⑦ 纯净 dsh 协助；**自更新从 2.0.0 起具备 + majorUpgrade 大版本换代判定**（结构不同 = 大版本+1，旧结构版本不自动更新）；破坏测试 5/5 通过 |
+| 2.0.0 | **完全重构（大版本换代）**：纯救援定位——仅保留守护进程 + git 仓库恢复。① .dsh 单仓库管理（会话/skill 不丢）② 远端私有库（token/SSH 双方案，当时设计 `.dsh@<dsh版本>.<设备ID>`，2.1.0 起改为固定 `dsh-git-rescue-backup`）③ 开机自启（命令在 .dsh 目录层）④ 救援环境 `<版本>@Save-clean/@Save-test` + save-lock 防装插件 ⑤ 专项恢复工具（repair-tools：plugin_config/boot_symlink/ro_volume/plugin_load）⑥ git 还原 ⑦ 纯净 dsh 协助；**自更新从 2.0.0 起具备 + majorUpgrade 大版本换代判定**（结构不同 = 大版本+1，旧结构版本不自动更新）；破坏测试 5/5 通过 |
+| 2.1.0 | **救援优先级调整 + 备份仓名固定 + 救援环境新命名**（2026-08-21 用户确立）：①救援链 = 自带模块修复 → LLM 修复 → git 回退（最后兜底）→ 纯净环境告知——git 覆盖不再优先，LLM 先修恢复健康即成功 ②备份仓名**固定 `dsh-git-rescue-backup`**（不含设备ID），设备 ID 作仓库内文件夹（多设备共用一仓）③救援环境命名代码写死 `<版本>@Save-test/@Save-clean`（rescue-env.js rescueEnvName 统一生成） |
 
 **旧 1.x 版本记录**（重构前，仅供追溯）：
 
@@ -124,13 +125,13 @@ dsh-git-rescue/
 | GitHub 空仓库建 blob 报 "Git Repository is empty" | 推送前 `ensureRepoSeeded`：Contents API 种 README 初始提交 |
 | 分支更新报 "Update is not a fast forward" | ref 更新 PATCH force 优先，404 才 POST |
 | pushSnapshot 读软链/目录报 EISDIR | lstat 判断：软链推链接文本(mode 120000)、目录跳过 |
-| 备份仓名用 hostname 会撞车/改名漂移 | `lib/device.js`：machine-id → 持久化 UUID → hostname 哈希；仓名 = `dsh-git-rescue-backup-<id前12位>` |
+| 备份仓名用 hostname 会撞车/改名漂移 | `lib/device.js`：machine-id → 持久化 UUID → hostname 哈希；**仓名固定 `dsh-git-rescue-backup`（2026-08-21 用户决定，不含设备ID），设备 ID 作仓库内文件夹**（`<设备ID>/profiles, sessions, skills, settings.yaml`） |
 | `/tmp` 跨命令被清 | 日志/临时文件落 workspace，别用 /tmp |
 | `pkill -f` 匹配到自己命令行被杀 | 用精确 PID（`ps aux | grep ... | grep -v 3081` 防误杀主实例） |
 
 ## 五、备份仓库约定
 
-- 默认：`<账号>/dsh-git-rescue-backup-<设备ID前12位>`（private，首次 push 自动创建 + seed）
+- 默认：`<账号>/dsh-git-rescue-backup`（private，**仓名固定，2026-08-21 用户决定**；首次 push 自动创建 + seed）——设备 ID 作为仓库内文件夹（`<设备ID>/` 下 profiles, sessions, skills, settings.yaml），多设备共用一仓互不干扰
 - 设备 ID：`/etc/machine-id` 优先；持久化 UUID 兜底（`git-rescue/device-id`）；hostname 只进仓库描述
 - 推送 = 当前快照（`git ls-files` 跟踪集 → blobs/tree/commit/ref），**不是**历史同步
 - 敏感隔离：`.credentials.yaml`/token/`storages/`/`git-rescue/` 在 .gitignore，实测推送零泄漏

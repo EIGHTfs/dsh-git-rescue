@@ -35,7 +35,7 @@ generatedBy: EIGHTfs 2026-08-20（用户原话整理）
 ### ② git 仓库 = .dsh 文件夹本地管理 + 远端备份
 - **git 仓库把 `.dsh` 文件夹用本地 git 仓库管理**（会话、skill 不会因启动失败而丢失）
 - 配置了 GitHub token **或 SSH key** 可备份到 GitHub 私有库
-- **远端仓库名称**：`.dsh@（dsh 版本）.（设备唯一标识）`——（）内是**变量，由守护进程获取**（读取机器信息、dsh 文件目录）
+- **远端仓库名称**：**固定 `dsh-git-rescue-backup`**（2026-08-21 用户决定更新；原设计 `.dsh@<dsh版本>.<设备ID>` 已弃用——GitHub 不允许 `.` 开头仓库名）。**设备 ID 作仓库内文件夹**（`<设备ID>/profiles, sessions, skills, settings.yaml`），多设备共用一仓互不干扰
 
 ### ③ 开机自启守护进程
 - 插件启动会依据被救援机写**系统开机自启的守护进程**
@@ -76,7 +76,7 @@ generatedBy: EIGHTfs 2026-08-20（用户原话整理）
 | 维度 | 2.0.0 实现 |
 |------|-----------|
 | 仓库结构 | 单组件根级（lib/、guardian/、skills/ 在根），非旧 components/ 子树 |
-| 备份仓名 | `.dsh@<dsh版本>.<设备ID>`（如 `.dsh@0.1.0-rc.6.87566bf2a1c8`；GitHub 不允许 `.` 开头时降级 `dsh-at-...`） |
+| 备份仓名 | **固定 `dsh-git-rescue-backup`**（2026-08-21 用户决定；原 `.dsh@<dsh版本>.<设备ID>` 已弃用），设备 ID 作仓库内文件夹 |
 | 守护进程启动命令位置 | `.dsh/rescue/rescue-start.sh`（.dsh 目录这一层） |
 | 救援环境命名 | `0.1.0-rc.6@Save-clean` / `0.1.0-rc.6@Save-test` |
 | 防装插件 | save-lock：Save-clean 环境拒绝其他插件注册，仅救援插件自身放行 |
