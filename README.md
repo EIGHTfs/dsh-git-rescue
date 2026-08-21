@@ -29,6 +29,7 @@
 | **自动更新** | v2.0.0 | 强制跟随 GitHub 最新稳定版 + **大版本换代升级**（卸载旧版→安装新版，代码级判断） |
 | guardian 守护 | v2.0.0 | 独立进程探活 + git 回退 + 拉起 + 自检（坏点标记防死循环）+ OOM 防护（自适应，env 可覆盖）+ OOM 故障识别（跳过无用回退直接拉起）+ peak-resume |
 | **内置 LLM 自治诊断** | v2.0.0 | guardian 直连 LLM（`.credentials.yaml` 的 DEEPSEEK_API_KEY 调 deepseek API）分析故障 + 建议动作（结构化 JSON），校验后执行；**纯代码修复优先**（plugin-health/repair-tools 先跑），LLM 作增强兜底 |
+| **profile 还原点 zip** | v2.5.0 | profile/配置变化**提交 git 时自动打包** zip（原始相对路径，根 = .dsh）；手动 `unzip -o` 覆盖即恢复（不依赖 git）；**文件名后缀标注触发插件**（`profile-restore-<时间>-<插件|config>.zip`），API/工具可列表/手动打包/覆盖恢复/删除 |
 | 插件树健康体检 | 合并自旧版 | plugin-health：声明/产物一致性检查（00:22 崩溃类型），拉起前自动修复 |
 | 会话恢复联动 | 合并自旧版 | 崩溃后自动调 session-manager 续跑中断会话（装了才调）**+ 自动续跑全局闸门**：DSH 刚启动默认关闭续跑（防崩溃恢复后批量建空壳），用户手动开启或第一次手动对话后自动放行 |
 | 接管式重启 | 合并自旧版 | 独立脚本 TERM→轮询恢复→验证，会话中断也能安全完成 |
@@ -179,7 +180,7 @@ dsh-git-rescue/
 └── test-git-rescue.mjs       # 单测
 ```
 
-**Agent 工具**：`git_rescue_status` / `git_rescue_init` / `git_rescue_backup` / `git_rescue_log` / `git_rescue_rollback` / `git_rescue_push` / `git_rescue_restart` / `git_rescue_repair` / `git_rescue_rescue_env` / `git_rescue_boot_autostart` / `git_rescue_link_recovery`
+**Agent 工具**：`git_rescue_status` / `git_rescue_init` / `git_rescue_backup` / `git_rescue_log` / `git_rescue_rollback` / `git_rescue_push` / `git_rescue_restart` / `git_rescue_repair` / `git_rescue_rescue_env` / `git_rescue_boot_autostart` / `git_rescue_link_recovery` / `git_rescue_restorepoints` / `git_rescue_restorepoint_build` / `git_rescue_restorepoint_restore`
 
 ### 组件二：guardian 独立进程
 
@@ -326,7 +327,7 @@ dsh-git-rescue/
 | guardian 探活 + failThreshold=3 | 照搬（GUARDIAN_FAIL_THRESHOLD） |
 | 回退前 autoSnapshot | pre-rollback commit 坏现场 |
 | 重启 + 健康检查自证 | 照搬（startWaitMs + probe） |
-| 手动 unzip 兜底 | 命令行 git 兜底 |
+| 手动 unzip 兜底 | 命令行 git 兜底 + **profile 还原点 zip（v2.5.0）**：提交 git 时自动打包，手动 `unzip -o` 覆盖恢复 |
 | 快照自带三平台恢复脚本 | 不需要（git 本身跨平台） |
 
 ### 增强（git 方案新增，原方案没有）
@@ -365,7 +366,7 @@ dsh-git-rescue/
 | **web 多选备份（会话/skill 定向备份）** | ✅ 已实现（2026-08-20）：guardian 网页用 `tools/dir-tree.mjs` 生成目录树供多选（目录级）→ 勾选存 `backup-select.json`（可复用）→ **git 本地按勾选写 .gitignore**（反向白名单 `*`+`!` 逐级放行）→ **git 远端按勾选推送**（`git add -f` 选中 → commit → push 备份仓）；实测会话A推/会话B排除 ✅ |
 | **插件安装门禁（测试闸门代码化）** | ✅ 已实现（2026-08-20）：① 检测插件安装（扫描 cordis.patch.yml vs registry）② 复制新插件 skills/ 到 `.dsh/skills/` ③ `git-rescue/plugin-registry.json` 记录测试状态 ④ **未测试插件阻止主环境重启**（`/api/start` 返回 403 强行接管）⑤ 测试通过更新 registry 放行；存量插件默认放行（不误拦）；`/api/plugin-gate`（状态）+ `/api/plugin-gate/scan` + `/api/plugin-gate/pass` |
 | **web 快照面板（git 快照）** | ⏳ 待办（2026-08-20 EIGHTfs 提出，源自旧版「创建快照」入口）：新版 web 加「快照」面板——**手动创建快照 = git commit**（`chore(snapshot): manual`）、**快照列表 = git 提交历史**、**恢复 = git 回退**；不引入 zip 插件，与新版 git 体系一致 |
-| 旧版会话管理 unzip 覆盖方案重构 | ⏳ 最高优先级待办（此版本提交前不进行） |
+| **旧版 unzip 覆盖方案重构** | ✅ 已实现（2026-08-21，v2.5.0）：profile 变化提交 git 时自动打包 zip 还原点（原始相对路径、根 = .dsh，手动 unzip 覆盖即恢复），文件名后缀标注触发插件；`/api/git-rescue/restore-points*`（列表/打包/恢复/删除）+ 工具 `git_rescue_restorepoints` / `git_rescue_restorepoint_build` / `git_rescue_restorepoint_restore`；与 git 主通道互补（git 回退 + zip 手动兜底双保险） |
 
 ## 📜 版本记录（旧版谱系 1.x，保留自 v1.13.0 README）
 
@@ -465,6 +466,22 @@ dsh-git-rescue/
 **为什么"不限制内存"不可行**：Node 没有无限堆选项（`--max-old-space-size` 必须给具体 MB，设 0 回落默认）；且本机总内存仅 8.7GB、可用常驻紧张——堆上限设太大反而让 DSH 抢占更多内存，**更快触发系统 OOM killer**。正确姿势：按物理内存自适应（50%），必要时 `DSH_MAX_OLD_SPACE=8192` 显式加大，同时留意系统整体内存水位（`git_rescue_status` 已显示）。
 
 **版本**：2.3.0 → 2.4.0。
+
+## ✅ 2.5.0 profile 还原点 zip（2026-08-21，用户要求"unzip 作为 git 救援小功能"）
+
+**背景**：旧快照恢复插件"备份变化的文件但作者水平不够，恢复没有全自动恢复还改了文件名都不方便手动覆盖恢复"。本版把 unzip 收编为 git 救援小功能，与 git 主通道互补（git 回退 + zip 手动兜底双保险）。
+
+| 项 | 改动 |
+|----|------|
+| `lib/restore-point.js`（新） | **profile/配置变化提交 git 时自动打包 zip 还原点**：收集未提交变更（profiles/、settings.yaml、skills/ 等，复用 restoreProfileOnly 白名单）→ **zip 内保留原始相对路径（根 = .dsh）** → 手动 `unzip -o` 覆盖即恢复，不依赖 git 命令 |
+| 文件名后缀标注触发插件 | `profile-restore-<YYYYMMDD-HHmmss>-<插件|config>.zip`：从 `cordis.patch.yml` 的 diff 新增行推断触发插件（`name:`/`id:`/`# dsh-xxx：` 注释），推断不到回退 `config` |
+| `commitAll()` 集成 | 每次提交前自动打包（失败不阻断提交，git 仍是主通道）；manifest.json 记录时间/原因/插件/文件清单 |
+| 存放位置 | `.dsh/git-rescue/restore-points/`（`git-rescue/` 已在 .gitignore，zip 不入库不占备份） |
+| API | `/api/git-rescue/restore-points`（列表）/ `build`（手动打包）/ `restore`（手动覆盖恢复，路径穿越防护）/ `remove` |
+| Agent 工具 | `git_rescue_restorepoints` / `git_rescue_restorepoint_build` / `git_rescue_restorepoint_restore` |
+| 测试 | T19 新增 24 断言（打包/插件推断/原始路径/手动覆盖恢复/列表删除/非法文件名防护），全套 **122 通过 0 失败** |
+
+**版本**：2.4.0 → 2.5.0。
 
 ## 🔗 联动与源码地址
 

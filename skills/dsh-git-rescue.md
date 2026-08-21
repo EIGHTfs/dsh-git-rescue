@@ -25,6 +25,7 @@ dsh-git-rescue/
 │   ├── index.js              # 插件入口（API + Agent 工具）
 │   ├── git.js / github.js / device.js / probe.js / flapping.js
 │   ├── process-capture.js / fault-classify.js
+│   ├── restore-point.js       # profile 还原点 zip（提交 git 时自动打包，unzip 手动覆盖）
 │   ├── rescue-env.js         # 救援环境（<版本>@Save-clean / @Save-test）
 │   ├── save-lock.js          # 纯净环境防装插件锁定
 │   ├── repair-tools.js       # 专项恢复工具（⑤）
@@ -44,6 +45,7 @@ dsh-git-rescue/
 
 | 版本 | 内容 |
 |------|------|
+| 2.5.0 | **profile 还原点 zip（unzip 小功能）**：profile/配置变化提交 git 时自动打包 zip（`lib/restore-point.js`）——收集未提交变更（profiles/、settings.yaml、skills/ 等，复用 restoreProfileOnly 白名单）→ **zip 内保留原始相对路径（根 = .dsh）** → 手动 `unzip -o` 覆盖即恢复（不依赖 git）；**文件名后缀标注触发插件**（`profile-restore-<时间>-<插件|config>.zip`，从 cordis.patch.yml diff 新增行推断 `name:`/`id:`/`# dsh-xxx：`）；存放 `.dsh/git-rescue/restore-points/`（gitignore 排除，不入库）；API `/api/git-rescue/restore-points`（列表/build/restore/remove）+ 工具 `git_rescue_restorepoints` / `git_rescue_restorepoint_build` / `git_rescue_restorepoint_restore`；commitAll 集成（提交前打包，失败不阻断）；T19 24 断言，全套 122 通过 |
 | 2.0.0 | **完全重构（大版本换代）**：纯救援定位——仅保留守护进程 + git 仓库恢复。① .dsh 单仓库管理（会话/skill 不丢）② 远端私有库 `.dsh@<dsh版本>.<设备ID>`（token/SSH 双方案）③ 开机自启（命令在 .dsh 目录层）④ 救援环境 `<版本>@Save-clean/@Save-test` + save-lock 防装插件 ⑤ 专项恢复工具（repair-tools：plugin_config/boot_symlink/ro_volume/plugin_load）⑥ git 还原 ⑦ 纯净 dsh 协助；**自更新从 2.0.0 起具备 + majorUpgrade 大版本换代判定**（结构不同 = 大版本+1，旧结构版本不自动更新）；破坏测试 5/5 通过 |
 
 **旧 1.x 版本记录**（重构前，仅供追溯）：

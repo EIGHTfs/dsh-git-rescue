@@ -444,6 +444,80 @@ console.log('== T18: invalid-apply 检测（纯代码，防 invalid plugin 崩�
   }
 }
 
+// T19: profile 还原点 zip（2026-08-21 用户要求：unzip 作为 git 救援小功能——profile 变化提交 git 时打包，手动覆盖恢复，文件名后缀标注触发插件）
+console.log('== T19: restore-point 还原点（zip 打包/插件推断/手动覆盖恢复） ==')
+{
+  const rp = await import('./lib/restore-point.js')
+  const zip = await import('./lib/zip.js')
+  const tdir = await mkdtemp(join(tmpdir(), 'gitrescue-t19-'))
+  try {
+    await git.initRepo(tdir)
+    // 初始基线：正常 cordis.patch.yml
+    const patchPath = join(tdir, 'profiles', 'web', 'cordis.patch.yml')
+    await fs.mkdir(join(tdir, 'profiles', 'web'), { recursive: true })
+    await fs.writeFile(patchPath, '# baseline\n- insert:\n    - id: existing\n      name: dsh-existing\n')
+    await fs.writeFile(join(tdir, 'settings.yaml'), 'theme: light\n')
+    await git.commit(tdir, 'baseline')
+    // 模拟插件安装导致的 profile 变化：cordis.patch.yml 新增 dsh-test-plugin 块
+    await fs.writeFile(patchPath, '# baseline\n- insert:\n    - id: existing\n      name: dsh-existing\n\n# 2026-08-21 安装\n- insert:\n    - id: test-plugin\n      name: dsh-test-plugin\n      config:\n        enabled: true\n')
+    await fs.writeFile(join(tdir, 'settings.yaml'), 'theme: dark\n')
+
+    // ① 打包：文件名后缀标注触发插件
+    const r1 = await rp.buildRestorePoint({ dshRoot: tdir, reason: 'T19' })
+    ok('打包 ok 且非 empty', r1.ok === true && r1.empty !== true, JSON.stringify(r1))
+    ok('文件名后缀标注插件 dsh-test-plugin', /^profile-restore-\d{8}-\d{6}-dsh-test-plugin\.zip$/.test(r1.name), `name=${r1.name}`)
+    ok('打包 2 个文件（cordis.patch.yml + settings.yaml）', r1.count === 2, `count=${r1.count}`)
+    const zipPath = join(rp.restorePointDir(tdir), r1.name)
+    ok('zip 文件已写入 restore-points/', (await fs.access(zipPath).then(() => true).catch(() => false)))
+
+    // ② zip 内容：原始相对路径（根 = .dsh）+ manifest
+    const entries = zip.unzipStore(await fs.readFile(zipPath))
+    ok('zip 含 manifest.json', entries.has('manifest.json'))
+    ok('zip 含 profiles/web/cordis.patch.yml（原始相对路径）', entries.has('profiles/web/cordis.patch.yml'), [...entries.keys()].join(','))
+    ok('zip 含 settings.yaml', entries.has('settings.yaml'))
+    ok('cordis.patch.yml 内容是变更后版本', entries.get('profiles/web/cordis.patch.yml').toString('utf8').includes('dsh-test-plugin'))
+    const manifest = JSON.parse(entries.get('manifest.json').toString('utf8'))
+    ok('manifest 记录触发插件', manifest.plugin === 'dsh-test-plugin', JSON.stringify(manifest.plugin))
+    ok('manifest 记录 reason', manifest.reason === 'T19')
+
+    // ③ 手动覆盖恢复：破坏现场 → unzip 覆盖 → 还原
+    await fs.writeFile(patchPath, '# BROKEN\n')
+    await fs.writeFile(join(tdir, 'settings.yaml'), 'theme: broken\n')
+    const rest = await rp.restoreRestorePoint({ dshRoot: tdir, name: r1.name })
+    ok('恢复 ok', rest.ok === true, rest.error || '')
+    ok('恢复 2 个文件', rest.restored.length === 2, JSON.stringify(rest.restored))
+    ok('cordis.patch.yml 已恢复（含 dsh-test-plugin）', (await fs.readFile(patchPath, 'utf8')).includes('dsh-test-plugin'))
+    ok('settings.yaml 已恢复 dark', (await fs.readFile(join(tdir, 'settings.yaml'), 'utf8')).trim() === 'theme: dark')
+    ok('manifest.json 未落盘到 .dsh 根', !(await fs.access(join(tdir, 'manifest.json')).then(() => true).catch(() => false)))
+
+    // ④ 列表 + 删除
+    const list = await rp.listRestorePoints(tdir)
+    ok('列表含刚生成的还原点', list.ok && list.points.some((p) => p.name === r1.name), JSON.stringify(list.points))
+    const del = await rp.removeRestorePoint({ dshRoot: tdir, name: r1.name })
+    ok('删除 ok', del.ok === true, del.error || '')
+    ok('删除后文件消失', !(await fs.access(zipPath).then(() => true).catch(() => false)))
+
+    // ④b 恢复后提交为新基线，隔离后续只改 settings.yaml 的场景
+    await git.commit(tdir, 'after restore')
+    await fs.writeFile(join(tdir, 'settings.yaml'), 'theme: blue\n')
+    const r2 = await rp.buildRestorePoint({ dshRoot: tdir, reason: 'T19-config-only' })
+    ok('仅配置变化时文件名后缀为 config', /-config\.zip$/.test(r2.name), `name=${r2.name}`)
+    ok('仅 1 个文件', r2.count === 1, `count=${r2.count}`)
+
+    // ⑤ 无变更时不打包
+    await git.commit(tdir, 'after config change')
+    const r3 = await rp.buildRestorePoint({ dshRoot: tdir, reason: 'T19-clean' })
+    ok('无未提交变更时 empty', r3.ok === true && r3.empty === true, JSON.stringify(r3))
+
+    // ⑥ 路径安全：非法文件名拒绝
+    const bad = await rp.restoreRestorePoint({ dshRoot: tdir, name: '../../etc/passwd.zip' })
+    ok('非法文件名被拒绝', bad.ok === false, JSON.stringify(bad))
+    ok('sanitizePluginName 清洗', rp.sanitizePluginName('@scope/pkg name') === 'scope-pkg-name')
+  } finally {
+    await fs.rm(tdir, { recursive: true, force: true })
+  }
+}
+
 // ---------- 汇总（所有 T 完成后统一统计，2026-08-21 修复：原汇总在 T9 前导致 T9-T13 失败不退出） ----------
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }

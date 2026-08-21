@@ -1,5 +1,5 @@
 /**
- * dsh-git-rescue 2.4.0 guardian — 独立守护进程（③⑤⑥⑦）
+ * dsh-git-rescue 2.5.0 guardian — 独立守护进程（③⑤⑥⑦）
  *
  * 独立于 DSH 运行（DSH 崩了它照样活着）。功能：
  * 1. 定时健康检查 DSH（GET http://<host>:<port>）

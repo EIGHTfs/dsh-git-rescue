@@ -1,5 +1,5 @@
 # dsh-git-rescue — bundle patch layer
-# DSH 救援恢复插件 2.4.0（守护进程 + git 仓库恢复 + 救援环境 + 专项工具）
+# DSH 救援恢复插件 2.5.0（守护进程 + git 仓库恢复 + 救援环境 + 专项工具）
 - insert:
     - id: git-rescue
       name: 'dsh-git-rescue'
