@@ -15,7 +15,7 @@
 > （跨机部署救援实例 + SSH 拉起纯净环境 + 可覆盖式恢复包）。本机插件救不了的场景，永远记得：
 > **再开一个 DSH 来救这个 DSH**——训练有素的 AI + 另一份 .dsh + 一份权威 skill 文档，比任何单个插件都可靠。
 
-**功能总览**（当前 2.2.1）：
+**功能总览**（当前 2.2.2）：
 
 | 功能 | 版本 | 一句话 |
 |------|------|--------|
@@ -25,6 +25,9 @@
 | 救援环境 | v2.1.0 | `<dsh版本>@Save-clean`（纯净，防装插件锁定）+ `<dsh版本>@Save-test`（测试），**命名代码写死**（rescue-env.js rescueEnvName 统一生成） |
 | 专项恢复工具 | v2.0.0 | 代码级诊断修复：plugin_config / boot_symlink / ro_volume / plugin_load / permission / session_repair（**救援链第一优先级**） |
 | LLM 自治修复 | v2.1.0 | guardian 直连 LLM 分析根因 + 白名单动作（**救援链第二优先级，优先于 git 回退**） |
+| **LLM 读 .dsh 智能快照** | v2.2.2 | 内置 LLM 每次注入 `.dsh` 智能快照（用户档案/配置/事件/会话概览，脱敏），**认识用户 + 看全故障现场**（collectDshSnapshot，见 guardian-llm-dsh-snapshot skill） |
+| **LLM web 模型选择** | v2.2.2 | guardian 网页下拉选 LLM 模型（deepseek-reasoner/chat/v4-flash，可持久化），resolveModel 优先读 |
+| **LLM 文件写权限** | v2.2.2 | `suggest_file_write` 白名单动作：内置 LLM 可受控写 `.dsh` 内文件（限路径+备份+失败回滚） |
 | git 还原恢复 | v2.1.0 | **最后兜底（2026-08-21 用户要求降优先）**：自带模块/LLM 都失败才 git 覆盖；故障分类 → 保留现场 → 坏点标记 → reset 到好提交 → 拉起 → 自检 |
 | 纯净 dsh 协助兜底 | v2.0.0 | 无法恢复时唤起 Save-clean，纯净 dsh 加载插件 skills 目录协助 |
 | **自动更新** | v2.0.0 | 强制跟随 GitHub 最新稳定版 + **大版本换代升级**（卸载旧版→安装新版，代码级判断） |
@@ -363,6 +366,16 @@ dsh-git-rescue/
 | 1.1.0 | 功能1 git 版本管理插件本体 |
 
 > 开发期修复的 bug（webServer 注册签名、tools output schema、bad 标记顺序、空仓 seed、ref 更新、软链推送）计入功能实现本身，Z 从发布后修复开始计数。
+
+## ✅ 2.2.2（2026-08-22，小版本 — guardian LLM 增强）
+
+- **内置 LLM 读 .dsh 智能快照**（`collectDshSnapshot`）：每次 `/api/llm-chat` 与救援诊断注入 `.dsh` 智能快照（用户档案 remember-me 脱敏 / 核心配置 / 守护状态 / 事件流 / 会话概览 / skill 清单；跳过二进制/超大/zstd/zip/node_modules/.credentials）——内置 LLM 由此**认识用户 + 看全故障现场**。为什么不全读 .dsh：629MB/1331 文件 token 爆炸。
+- **LLM web 模型选择**：guardian 网页下拉选 LLM 模型（deepseek-reasoner/chat/v4-flash）+ 持久化 `git-rescue/llm-config.json`；`resolveModel`/`resolveBaseUrl` 优先读该配置。
+- **LLM 文件写权限**：新增白名单动作 `suggest_file_write`——内置 LLM 可受控写 `.dsh` 内文本配置（限路径在 .dsh 内 + 文本扩展 + 写前备份到 `git-rescue/llm-write-backup/` + 重启验证失败回滚）。
+- **接管式重启门禁**：会话触发接管式重启前，先输出救援环境守护（guardian 控制台）局域网 IP + 检测全部关键进程（主 DSH/guardian/主反代/救援反代）存活，全部存活才重启（`dsh-restart-takeover` skill 七章）。
+- 新增 skill：`guardian-llm-dsh-snapshot`（内置 LLM 读 .dsh 快照）、`dsh-restart-takeover`（接管式重启门禁，补进插件）、`rescue-env-expose-rd`（救援环境对外反代）——均登记进 `dsh.skills`。
+
+**版本**：2.2.1 → 2.2.2（一次提交一个小版本，`ddff730`）。
 
 ## ✅ 2.2.1（2026-08-21，小版本）
 
