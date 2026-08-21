@@ -1,5 +1,5 @@
 /**
- * dsh-git-rescue 2.0.0 guardian — 独立守护进程（③⑤⑥⑦）
+ * dsh-git-rescue 2.1.0 guardian — 独立守护进程（③⑤⑥⑦）
  *
  * 独立于 DSH 运行（DSH 崩了它照样活着）。功能：
  * 1. 定时健康检查 DSH（GET http://<host>:<port>）
@@ -634,7 +634,7 @@ async function resumePeakIfPaused() {
   } catch { /* fail-soft：不阻断救援 */ }
 }
 
-/** 救援流程：专项工具 → 保留现场 → 标记坏点 → 回退 → 重启 → 健康检查。 */
+/** 救援流程（2026-08-21 优先级调整）：自带功能模块修复（⑤）→ LLM 修复（⑥）→ git 覆盖（⑦，最后兜底）→ 纯净环境告知。 */
 async function recover(source = 'auto') {
   if (state.manualBusy) return { ok: false, error: 'busy' }
   state.manualBusy = true
@@ -701,15 +701,67 @@ async function recover(source = 'auto') {
       }
     }
 
-    log('warn', '专项工具未能恢复，继续 git 回退（⑥）')
+    log('warn', '专项工具未能恢复——先 LLM 自治修复（⑥），git 覆盖降为最后兜底（⑦）')
 
-    // 0.3) TERM 来源追踪：抓取进程退出上下文
+    // 0.3) TERM 来源追踪：抓取进程退出上下文（供 LLM 分析 + 留证）
     const pid = await findDshPid()
     if (pid || (await readLogTail(STDERR_FILE, 1))) {
       const ctx = await captureExitContext(pid, CFG.dshPort, { stderrFile: STDERR_FILE })
       log('warn', `退出现场:\n${ctx}`)
       fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'exit-context', msg: ctx }) + '\n').catch(() => {})
     }
+
+    // ===== ⑥ LLM 自治修复（2026-08-21 用户要求：git 覆盖优先级最低，先 LLM 修复）=====
+    // guardian 直连 LLM 分析根因并给白名单建议（report_only / suggest_git_reset / suggest_restart / suggest_config_fix），
+    // 自动执行后探活：恢复健康即成功返回（不 git 覆盖）；失败才进入 git 覆盖兜底。
+    let llmRecovered = false
+    let llmAnalysis = ''
+    try {
+      const bootTail = await readLogTail(STDERR_FILE, 40)
+      const gitLogR = await git(CFG.dshHome, ['log', '--oneline', '-n', '8'])
+      const llmR = await llmDiagnoseRescue({
+        dshHome: CFG.dshHome,
+        fault: faultInfo || {},
+        reason: reasonInfo || `recover-ok=false`,
+        bootLog: bootTail || '',
+        gitLog: gitLogR.ok ? gitLogR.stdout : '',
+        repairHits: repair.hits || [],
+      })
+      if (llmR.ok) {
+        llmAnalysis = llmR.analysis || ''
+        log('warn', `🤖 LLM 诊断: severity=${llmR.severity} | ${(llmR.analysis || '').slice(0, 160)}`)
+        for (const a of llmR.suggestedActions) {
+          log('info', `  LLM 建议动作 [${a.type}]: ${a.reason || ''}`)
+        }
+        const llmExec = await executeLlmActions(llmR.suggestedActions)
+        for (const r of llmExec.results) {
+          log(r.ok ? 'info' : 'warn', `  LLM 动作结果 [${r.type}]: ${r.detail || r.error || (r.skipped ? '跳过(仅分析)' : '')}${r.recoveredAfter ? ' → 已恢复健康' : ''}`)
+        }
+        if (llmExec.executed.length) log('info', `🤖 LLM 自动执行完成: ${llmExec.executed.join('、')}`)
+        if (llmExec.recovered) llmRecovered = true
+      } else {
+        log('warn', `LLM 诊断不可用（继续 git 兜底）: ${llmR.error || '未知'}`)
+      }
+    } catch (e) {
+      log('warn', `LLM 诊断异常（不影响后续）: ${String(e?.message ?? e)}`)
+    }
+
+    if (llmRecovered) {
+      log('warn', `✅ LLM 自治修复成功（未做 git 覆盖）`)
+      state.dsh = 'running'
+      state.failCount = 0
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'llm-recovered', msg: `LLM 自治修复成功（未 git 覆盖）: ${llmAnalysis.slice(0, 200)}` }) + '\n').catch(() => {})
+      await resumePeakIfPaused()
+      const exp = await appendRescueExperience({
+        rootCause: `LLM 自治修复成功（未 git 覆盖）: ${llmAnalysis.slice(0, 80) || 'unknown'}`,
+        detail: `fault=${(faultInfo || {}).type || 'unknown'}（LLM 自动执行，跳过 git 覆盖）`,
+        dshHome: CFG.dshHome,
+      })
+      if (exp.ok && exp.appended) log('info', `🧠 救援经验已追加到权威 skill: ${exp.path}`)
+      return { ok: true, to: 'llm-fix', from: 'llm', llmRecovered: true }
+    }
+
+    log('warn', 'LLM 未能修复——git 覆盖作为最后兜底（⑦）')
 
     // 0.4) 插件安装事故识别：回退前提示疑似装/改插件
     const pluginFiles = ['profiles/web/cordis.patch.yml', 'profiles/web/package.json', 'profiles/web/cordis.yml']
@@ -776,6 +828,7 @@ async function recover(source = 'auto') {
       good,
       ok,
       repairHits: repair.hits || [],
+      llmAnalysis: llmAnalysis || '', // 2026-08-21：LLM 修复已先于 git 覆盖执行，分析结果并入报告
       changedFiles,
       manualSteps: ok
         ? ['DSH 已恢复健康，无需手动干预；若后续异常可用还原点 zip 恢复改动文件']
@@ -811,67 +864,13 @@ async function recover(source = 'auto') {
       })
       if (exp.ok && exp.appended) log('info', `🧠 救援经验已追加到权威 skill: ${exp.path}`)
     } else {
-      // ===== guardian 直连 LLM 自治诊断（2026-08-20）：失败时先让 LLM 分析根因并给白名单建议 =====
-      let llmResult = null
-      try {
-        const bootTail = await readLogTail(STDERR_FILE, 40)
-        const gitLogR = await git(CFG.dshHome, ['log', '--oneline', '-n', '8'])
-        llmResult = await llmDiagnoseRescue({
-          dshHome: CFG.dshHome,
-          fault: faultInfo || {},
-          reason: reasonInfo || `recover-ok=false (rolled back to ${good})`,
-          bootLog: bootTail || '',
-          gitLog: gitLogR.ok ? gitLogR.stdout : '',
-          repairHits: repair.hits || [],
-        })
-        if (llmResult.ok) {
-          log('warn', `🤖 LLM 诊断: severity=${llmResult.severity} | ${(llmResult.analysis || '').slice(0, 160)}`)
-          for (const a of llmResult.suggestedActions) {
-            log('info', `  LLM 建议动作 [${a.type}]: ${a.reason || ''}`)
-          }
-          // ===== LLM 建议动作自动执行（2026-08-20 放开，所有用户默认可用）=====
-          // 白名单 + commit 存在校验 + repair-tools fixId 限定；恢复健康即成功；上限 3 个防循环
-          const llmExec = await executeLlmActions(llmResult.suggestedActions)
-          for (const r of llmExec.results) {
-            log(r.ok ? 'info' : 'warn', `  LLM 动作结果 [${r.type}]: ${r.detail || r.error || (r.skipped ? '跳过(仅分析)' : '')}${r.recoveredAfter ? ' → 已恢复健康' : ''}`)
-          }
-          if (llmExec.executed.length) log('info', `🤖 LLM 自动执行完成: ${llmExec.executed.join('、')}`)
-          if (llmExec.recovered) {
-            // LLM 动作修复成功：更新状态并复用成功路径（经验固化等由外层 ok 分支处理）
-            log('warn', `✅ LLM 自治修复成功（无需纯净环境）`)
-            ok = true
-            state.dsh = 'running'
-            state.failCount = 0
-          }
-          // LLM 分析结果并入诊断报告（落盘）
-          const diag2 = await writeDiagnosticReport(CFG.dshHome, {
-            ...reportInfo,
-            ok,
-            llmAnalysis: llmResult.analysis,
-            llmActions: llmResult.suggestedActions,
-            llmSeverity: llmResult.severity,
-            llmExecResults: llmExec.results,
-          })
-          if (diag2.ok) log('info', `🤖 LLM 诊断已并入报告: ${diag2.path}`)
-        } else {
-          log('warn', `LLM 诊断不可用（回退模板报告）: ${llmResult.error || '未知'}`)
-        }
-      } catch (e) {
-        log('warn', `LLM 诊断异常（不影响后续）: ${String(e?.message ?? e)}`)
-      }
-      if (!ok) {
-        state.dsh = 'error'
-        log('error', `救援完成但 DSH 仍未健康（回退到 ${good}）`)
-        await wakeCleanEnv(`recover-ok=false (rolled back to ${good})`)
-      } else {
-        // LLM 自治修复成功：补经验固化（测试环境跳过）
-        const exp = await appendRescueExperience({
-          rootCause: `LLM 自治修复成功: ${llmExec?.executed?.join('+') || 'unknown'}`,
-          detail: `fault=${(faultInfo || {}).type || 'unknown'}（LLM 自动执行，未拉纯净环境）`,
-          dshHome: CFG.dshHome,
-        })
-        if (exp.ok && exp.appended) log('info', `🧠 救援经验已追加到权威 skill: ${exp.path}`)
-      }
+      // ===== ⑦.5 git 覆盖后仍失败 → 告知用户在纯净环境自行修复（2026-08-21 用户要求）=====
+      // 救援链：自带功能模块修复 → LLM 修复 → git 覆盖（最后兜底）→ 纯净环境协助。
+      // LLM 已在上游（git 覆盖前）执行过，此处直接唤起纯净环境并告知人工/纯净 AI 自行修复。
+      state.dsh = 'error'
+      log('error', `救援完成但 DSH 仍未健康（git 覆盖到 ${good} 后仍失败）——告知用户：请在纯净环境自行修复`)
+      await wakeCleanEnv(`recover-ok=false (rolled back to ${good})`)
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'notify-user-clean-env', msg: `git 覆盖后仍失败，已告知用户在纯净环境自行修复（rolled back to ${good}）` }) + '\n').catch(() => {})
     }
     return { ok, to: good, from: head }
   } catch (e) {

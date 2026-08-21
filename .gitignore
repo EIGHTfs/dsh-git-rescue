@@ -1,0 +1,10 @@
+
+# npm 下载产物（dsh-git-push 自动追加，2026-08-20）
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+npm-debug.log*
+.npm/
+.pnpm-store/
