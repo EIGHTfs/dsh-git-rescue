@@ -255,3 +255,32 @@ button.ghost { background: var(--card2); border: 1px solid var(--border); }
   background: var(--bg);
   color: var(--text);
 }
+/* 日志区内联对话：输入框占满中间（清空日志按钮左、发送按钮右） */
+.chat-input {
+  flex: 1;
+  min-width: 160px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+.chat-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* 内联对话历史：限高滚动 */
+.chat-history {
+  flex: none;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--bg-alt);
+  border-radius: 4px;
+}
+.chat-history::after {
+  content: '';
+  display: block;
+  clear: both;
+}

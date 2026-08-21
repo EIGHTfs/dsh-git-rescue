@@ -141,47 +141,21 @@
     </div>
   </div>
 
-  <!-- ============ 监控日志 ============ -->
+  <!-- ============ 监控日志 + LLM 对话 ============ -->
   <div class="group" id="group-log">
     <div class="group-head">📋 监控日志</div>
     <div class="group-body">
       <div id="log" class="log"><div class="empty">暂无日志</div></div>
+      <div id="llm-chat-history" class="chat-history" style="display:none"></div>
       <div class="row mt">
         <button class="ghost" id="btn-clear-log">清空日志显示</button>
-      </div>
-    </div>
-  </div>
-
-
-  <!-- ============ 与日志 LLM 对话 ============ -->
-  <div class="group" id="group-llm-chat">
-    <div class="group-head">🤖 与日志 LLM 对话</div>
-    <div class="group-body">
-      <div class="hint">基于守护进程日志，让 LLM 帮你分析故障原因或提供建议。</div>
-      <div class="row mt">
-        <button class="primary" id="llm-chat-btn">💬 开始对话</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 对话模态框 -->
-  <div id="llm-chat-modal" class="modal" style="display:none">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>🤖 LLM 对话</h3>
-        <button class="close" onclick="closeChatModal()">×</button>
-      </div>
-      <div class="modal-body">
-        <div id="llm-chat-history" class="chat-history"></div>
-        <div class="chat-input-row">
-          <input type="text" id="llm-chat-input" placeholder="输入问题，按 Enter 发送..." onkeydown="if(event.key==='Enter') sendChatMessage()">
-          <button class="primary" onclick="sendChatMessage()">发送</button>
-        </div>
+        <input type="text" id="llm-chat-input" class="chat-input" placeholder="向 LLM 提问（基于以上日志）… 按 Enter 发送" onkeydown="if(event.key==='Enter') sendChatMessage()">
+        <button class="primary" id="llm-send-btn">发送</button>
       </div>
     </div>
   </div>
 
 </div>
-<script src="/app.js?v=20260821-3"></script>
+<script src="/app.js?v=20260821-4"></script>
 </body>
 </html>

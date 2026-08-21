@@ -511,9 +511,34 @@
     loadLog();
     loadBackupStatus();
     setInterval(() => { loadStatus(); loadLog(); loadBackupStatus(); }, 5000);
-    // LLM 对话按钮事件绑定
-    const chatBtn = document.getElementById('llm-chat-btn');
-    if (chatBtn) chatBtn.addEventListener('click', openChatModal);
+    // LLM 对话（内联：日志区底部对话框 + 发送按钮）
+    const sendBtn = document.getElementById('llm-send-btn');
+    if (sendBtn) sendBtn.addEventListener('click', sendChatMessage);
+  }
+
+  // ===== 与日志 LLM 对话（2026-08-21）=====
+  async function sendChatMessage() {
+    const input = document.getElementById('llm-chat-input');
+    const history = document.getElementById('llm-chat-history');
+    const question = (input.value || '').trim();
+    if (!question) return;
+    // 显示对话历史区
+    if (history.style.display === 'none') history.style.display = '';
+    history.innerHTML += `<div class="chat-user">你: ${escapeHtml(question)}</div>`;
+    input.value = '';
+    history.scrollTop = history.scrollHeight;
+    // 取当前日志作为上下文
+    const st = await api('/api/status');
+    const logContext = (st.ok && st.log)
+      ? st.log.slice(-50).map(e => `[${e.timeLocal || e.time}] ${e.level}: ${e.msg}`).join('\n')
+      : '';
+    const r = await api('/api/llm-chat', 'POST', { question, logContext });
+    if (r.ok) {
+      history.innerHTML += `<div class="chat-assistant">助手: ${escapeHtml(r.answer || '无回复')}</div>`;
+    } else {
+      history.innerHTML += `<div class="chat-error">❌ ${escapeHtml(r.error || '请求失败')}</div>`;
+    }
+    history.scrollTop = history.scrollHeight;
   }
 
   document.addEventListener('DOMContentLoaded', start);
