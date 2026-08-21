@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSH Plugin Store - DeepSeek Harness 插件商店</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1d26 0%, #2a2e3a 100%);
+      color: #e5e9f0;
+      min-height: 100vh;
+    }
+    .header {
+      background: rgba(26, 29, 38, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid #3a3f4b;
+      padding: 1rem 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #4176e6;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .controls {
+      max-width: 1200px;
+      margin: 2rem auto;
+      padding: 0 2rem;
+    }
+    .search-box {
+      position: relative;
+      margin-bottom: 1rem;
+    }
+    .search-box input {
+      width: 100%;
+      padding: 0.75rem 1rem 0.75rem 3rem;
+      background: rgba(42, 46, 58, 0.8);
+      border: 1px solid #3a3f4b;
+      border-radius: 8px;
+      color: #e5e9f0;
+      font-size: 1rem;
+    }
+    .search-box::before {
+      content: "🔍";
+      position: absolute;
+      left: 1rem;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    .filters {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .filter-btn {
+      padding: 0.4rem 1rem;
+      background: rgba(42, 46, 58, 0.6);
+      border: 1px solid #3a3f4b;
+      border-radius: 20px;
+      color: #8c91a0;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-size: 0.9rem;
+    }
+    .filter-btn:hover, .filter-btn.active {
+      background: #4176e6;
+      border-color: #4176e6;
+      color: #fff;
+    }
+    .stats {
+      max-width: 1200px;
+      margin: 0 auto 1rem;
+      padding: 0 2rem;
+      display: flex;
+      gap: 2rem;
+      color: #8c91a0;
+      font-size: 0.9rem;
+    }
+    .plugin-grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem 2rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+    .plugin-card {
+      background: rgba(42, 46, 58, 0.6);
+      border: 1px solid #3a3f4b;
+      border-radius: 12px;
+      padding: 1.5rem;
+      transition: all 0.3s;
+      display: flex;
+      flex-direction: column;
+    }
+    .plugin-card:hover {
+      transform: translateY(-4px);
+      border-color: #4176e6;
+      box-shadow: 0 8px 24px rgba(65, 118, 230, 0.2);
+    }
+    .plugin-name {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #e5e9f0;
+      text-decoration: none;
+      margin-bottom: 0.5rem;
+    }
+    .plugin-name:hover { color: #4176e6; }
+    .plugin-desc {
+      color: #b0b5c0;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      flex: 1;
+      margin-bottom: 1rem;
+    }
+    .plugin-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 1rem;
+      border-top: 1px solid #3a3f4b;
+    }
+    .language-tag {
+      padding: 0.25rem 0.75rem;
+      background: rgba(65, 118, 230, 0.2);
+      border-radius: 12px;
+      font-size: 0.8rem;
+      color: #6b9fff;
+    }
+    .install-btn {
+      padding: 0.5rem 1.25rem;
+      background: linear-gradient(135deg, #4176e6, #6b9fff);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.3s;
+    }
+    .install-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 12px rgba(65, 118, 230, 0.4);
+    }
+    .loading, .error {
+      text-align: center;
+      padding: 3rem;
+      color: #8c91a0;
+    }
+    .footer {
+      text-align: center;
+      padding: 2rem;
+      color: #8c91a0;
+      font-size: 0.9rem;
+      border-top: 1px solid #3a3f4b;
+      margin-top: 2rem;
+    }
+    @media (max-width: 768px) {
+      .plugin-grid { grid-template-columns: 1fr; }
+      .header-inner { flex-direction: column; gap: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a href="#" class="logo">📦 DSH Plugin Store</a>
+      <a href="https://github.com/EIGHTfs" target="_blank" style="color: #8c91a0; text-decoration: none;">GitHub</a>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="搜索插件...">
+    </div>
+    <div class="filters">
+      <button class="filter-btn active" data-filter="all">全部</button>
+      <button class="filter-btn" data-filter="JavaScript">JavaScript</button>
+      <button class="filter-btn" data-filter="Python">Python</button>
+      <button class="filter-btn" data-filter="Shell">Shell</button>
+    </div>
+  </div>
+
+  <div class="stats">
+    <span id="totalCount">加载中...</span>
+    <span id="lastUpdate">-</span>
+  </div>
+
+  <main class="plugin-grid" id="pluginGrid"></main>
+
+  <footer class="footer">
+    <p>Powered by <a href="https://github.com/EIGHTfs/EIGHTfs.github.io" target="_blank">EIGHTfs</a></p>
+  </footer>
+
+  <script>
+    // DSH 插件白名单（来源：dsh-repo-index）
+    const PLUGINS = [
+      {
+        name: "dsh-git-rescue",
+        desc: "git 备份恢复 + 救援积分系统 + 接管式重启",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-git-rescue"
+      },
+      {
+        name: "dsh-git-push",
+        desc: "git 自动提交推送 + 代码审计门禁",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-git-push"
+      },
+      {
+        name: "dsh-session-manager",
+        desc: "会话管理 + 归档 + 高峰期暂停 + 会话恢复联动",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-session-manager"
+      },
+      {
+        name: "dsh-image-preview",
+        desc: "会话内图片预览 + 零 token 发图 + SVG 转换",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-image-preview"
+      },
+      {
+        name: "dsh-bili-publisher",
+        desc: "B站动态发布 + 登录 Cookie 管理",
+        lang: "Python",
+        url: "https://github.com/EIGHTfs/dsh-bili-publisher"
+      },
+      {
+        name: "dsh-custom-provider",
+        desc: "自定义 LLM 提供商注册 + API 端点配置",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-custom-provider"
+      },
+      {
+        name: "dsh-workflow-audit",
+        desc: "双模型流程审计（deepseek 分析 → agnes 解决 → deepseek 检查）",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-workflow-audit"
+      },
+      {
+        name: "dsh-test-sync-plugin",
+        desc: "测试环境同步插件 + 版本管理",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/dsh-test-sync-plugin"
+      },
+      {
+        name: "gamebanana-mods-downloader",
+        desc: "GameBanana Mod 下载器 + Server/MV3 扩展 + Native Messaging",
+        lang: "JavaScript",
+        url: "https://github.com/EIGHTfs/gamebanana-mods-downloader"
+      },
+      {
+        name: "DeepSeekHarness-NAS",
+        desc: "DSH 部署环境 + NAS 配置文档",
+        lang: "Shell",
+        url: "https://github.com/EIGHTfs/DeepSeekHarness-NAS"
+      }
+    ];
+
+    let currentFilter = 'all';
+    let searchTerm = '';
+
+    function getFilteredPlugins() {
+      return PLUGINS.filter(p => {
+        const matchesFilter = currentFilter === 'all' || p.lang === currentFilter;
+        const matchesSearch = !searchTerm ||
+          p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.desc.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesFilter && matchesSearch;
+      });
+    }
+
+    function renderPlugins() {
+      const filtered = getFilteredPlugins();
+      const grid = document.getElementById('pluginGrid');
+      
+      if (filtered.length === 0) {
+        grid.innerHTML = '<div class="loading"><p>🔍 没有找到匹配的插件</p></div>';
+        return;
+      }
+
+      grid.innerHTML = filtered.map(p => `
+        <article class="plugin-card">
+          <a href="${p.url}" target="_blank" class="plugin-name">${p.name}</a>
+          <p class="plugin-desc">${p.desc}</p>
+          <div class="plugin-footer">
+            <span class="language-tag">${p.lang}</span>
+            <a href="${p.url}/releases" target="_blank" class="install-btn">安装 →</a>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function updateStats() {
+      document.getElementById('totalCount').textContent = `${PLUGINS.length} 个插件`;
+      const now = new Date();
+      document.getElementById('lastUpdate').textContent = `更新于 ${now.toLocaleTimeString('zh-CN')}`;
+    }
+
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      searchTerm = e.target.value;
+      renderPlugins();
+    });
+
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        renderPlugins();
+      });
+    });
+
+    renderPlugins();
+    updateStats();
+  </script>
+</body>
+</html>

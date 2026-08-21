@@ -100,6 +100,8 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.10.0 | 功能10：测试环境路径判定（status.self.isTest，DSH_HOME 含 dsh-test-*）+ 沙盒环境能力检测（lib/sandbox.js：NoNewPrivs/CapEff/sudo 可行性/只读挂载，status 暴露 sandbox 字段） |
+| 1.9.0 | 功能9：测试环境入口整合（原 dsh-test-env-entry：侧边栏面板 + /api/dsh-test-env/*） |
 | 1.8.0 | 功能8：可选 sudo-key（插件配置，绝不明文显示/存储）——系统故障时 guardian 自动 remount rw 修复；无 root 环境不配置则保持"告警人工" |
 | 1.7.2 | 修复（严重/P0）：guardian 故障分类——系统只读/引导软链冲突判定为不可回退（停止无意义回退重启，防无限重启），仅插件配置变更才走 git 回退 |
 | 1.7.1 | 修复：guardian 插件安装事故识别（救援时 diff 插件配置，标注疑似装插件崩溃）+ 开机自启脚本 |

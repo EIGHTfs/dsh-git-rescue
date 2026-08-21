@@ -25,6 +25,7 @@ import { computeScoresFromEvents, refreshScoreSnapshot, scoreFileName } from './
 import { AUTO_UPDATE_ENABLED, UPDATE_INTERVAL_MS, checkForUpdate, applyUpdate } from './self-update.js'
 import { registerTestEnvEntry } from './test-env-entry.js'
 import { linkSessionRecovery } from './session-link.js'
+import { detectSandbox } from './sandbox.js'
 
 export const name = 'dsh-git-rescue'
 export const inject = ['webServer']
@@ -263,6 +264,8 @@ async function collectStatus() {
     lastCrashDetectedAt,
     autoUpdate: { ...autoUpdateState },
     sessionLink: { ...sessionLinkState },
+    // v1.10.0：沙盒/容器环境能力检测（NoNewPrivs/CapEff/sudo 可行性/只读挂载）
+    sandbox: await detectSandbox(),
   }
 }
 

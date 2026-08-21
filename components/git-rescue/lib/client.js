@@ -3,7 +3,7 @@
 // 侧边栏底部（设置上方）新增「测试环境」入口，点击展开浮层面板：
 //   · 主实例 / 测试实例 / 纯环境 三张状态卡：端口、运行状态徽标、可点击打开链接
 //   · 底部操作：打开另一个环境（正式⇄测试互相跳转）/ 启动测试环境 / 停止测试环境
-// 当前所在环境通过 location.port 判断（3080/3081=正式，3083-3182/3084=测试），
+// 当前所在环境通过 status.self.isTest 判断（v1.10.0：宿主端按 DSH_HOME 路径判定，端口范围兜底），
 // 「打开测试实例」在自己身上时自动变成「打开正式环境」，实现双向互跳。
 // 数据源为宿主路由 /api/dsh-test-env/status（打开面板时自动刷新）。
 // 纯内联样式 + 主题 CSS 变量（--dsw-*），不依赖任何哈希类名。
@@ -176,17 +176,19 @@ window.__ModuleLoader__.load({
         }
       }, [busy, refresh]);
 
-      const openLink = (url) => {
-        if (url) window.open(url, "_blank", "noopener");
-      };
+      // 跳转一律用「原生 <a target="_blank"> 用户手势导航」，绝不用 window.open：
+      // window.open 是程序化弹窗，会被浏览器弹窗拦截器拦掉（尤其跨域+noopener），拦了就"根本没跳"。
 
       // ---------- 当前环境检测（正式 ⇄ 测试互相跳转） ----------
-      // 3080/3081 = 正式环境（主实例）；3083-3182（含反代 3084）= 测试环境
+      // v1.10.0：优先路径判断——status.self.isTest 由宿主端按 DSH_HOME 是否含 dsh-test-* 判定
+      // （测试实例端口自动分配会漂移、残留实例也可能落在 3083-3182，端口判断不可靠）；
+      // status 未加载时兜底端口范围判断（3080/3081=正式，3083-3182/3084=测试）。
       const currentPort = Number(window.location.port || (window.location.protocol === "https:" ? 443 : 80));
-      const isTestEnv = currentPort >= 3083 && currentPort <= 3182;
+      const isTestEnv = status?.self?.isTest ?? (currentPort >= 3083 && currentPort <= 3182);
       // 默认假设：插件的宿主（status.main.url 指向正式）用于判断目标
-      const targetMain = status?.main?.url ?? "http://10.10.10.121:3080";
-      const targetTest = status?.test?.url ?? "http://10.10.10.121:3084";
+      // ⚠️ 禁止硬编码机器地址（host-address-convention）：本机为 10.10.10.4，旧机 10.10.10.121 已下线
+      const targetMain = status?.main?.url ?? "http://10.10.10.4:3080";
+      const targetTest = status?.test?.url ?? "http://10.10.10.4:3084";
       // 在测试实例上看不到「打开测试实例」（跳自己）→ 改为「打开正式环境」；反之亦然
       const swapBtn =
         isTestEnv
@@ -224,7 +226,8 @@ window.__ModuleLoader__.load({
               children: (0, react_jsx_runtime.jsx)("a", {
                 style: S.link,
                 href: info.url,
-                onClick: (event) => { event.preventDefault(); openLink(info.url); },
+                target: "_blank",
+                rel: "noopener noreferrer",
                 children: info.url,
               }),
             }),
@@ -310,13 +313,16 @@ window.__ModuleLoader__.load({
                                 (0, react_jsx_runtime.jsxs)("div", {
                                   style: S.actions,
                                   children: [
-                                    (0, react_jsx_runtime.jsx)("button", {
-                                      style: S.actionBtn(false),
-                                      disabled: busy || !swapBtn.url,
-                                      title: isTestEnv ? "跳转到正式环境（主实例）" : "跳转到测试环境",
-                                      onClick: () => openLink(swapBtn.url),
-                                      children: `${swapBtn.icon} ${swapBtn.label}`,
-                                    }),
+                                    // 跳转按钮用原生 <a target="_blank">（用户手势导航，浏览器不拦截；window.open 会被弹窗拦截器拦掉）
+                                    swapBtn.url &&
+                                      (0, react_jsx_runtime.jsx)("a", {
+                                        style: S.actionBtn(false),
+                                        title: isTestEnv ? "跳转到正式环境（主实例）" : "跳转到测试环境",
+                                        href: swapBtn.url,
+                                        target: "_blank",
+                                        rel: "noopener noreferrer",
+                                        children: `${swapBtn.icon} ${swapBtn.label}`,
+                                      }),
                                     (0, react_jsx_runtime.jsx)("button", {
                                       style: S.actionBtn(false),
                                       disabled: busy,

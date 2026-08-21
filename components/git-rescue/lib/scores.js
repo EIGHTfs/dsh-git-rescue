@@ -74,7 +74,9 @@ export async function computeScoresFromEvents(stateRoot, deviceId, source = 'mac
 
   out.history.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))
   if (out.history.length > 200) out.history = out.history.slice(-200)
-  out.total = out.byType.crash + out.byType.guardian + out.byType.manual
+  // 计分权重：guardian/manual 救援成功=1分，crash 检测=0.05分
+  const CRASH_WEIGHT = 0.05
+  out.total = Math.round((out.byType.crash * CRASH_WEIGHT + out.byType.guardian + out.byType.manual) * 100) / 100
   return out
 }
 

@@ -30,8 +30,8 @@ const Config = z.object({
   testPortEnd: z.number().default(3182),
   /** 测试实例反代端口 */
   testProxyPort: z.number().default(3084),
-  /** 局域网入口（访问地址前缀） */
-  lanUrl: z.string().default('http://10.10.10.121'),
+  /** 局域网入口（访问地址前缀）——⚠️ 禁止硬编码旧机器地址（host-address-convention）：本机为 10.10.10.4，旧机 10.10.10.121 已下线 */
+  lanUrl: z.string().default('http://10.10.10.4'),
   enabled: z.boolean().default(true),
 });
 
@@ -47,6 +47,19 @@ function listeningPorts() {
       resolve(ports);
     });
   });
+}
+
+/**
+ * 路径判断是否为测试环境（v1.10.0，替代端口范围判断）：
+ * DSH_HOME 路径含 `dsh-test-home`（或 `dsh-test-` 前缀目录）即测试环境；
+ * 主实例 /vol1/@appshare/DeepSeekHarness/.dsh 不含 → 正式环境。
+ * 为什么不用端口：测试实例端口自动分配（3083-3182），残留实例也可能落在范围内，
+ * 端口会撞会漂移；DSH_HOME 是实例启动时确定的稳定路径，判断更可靠。
+ */
+export function isTestHomePath(dshHome) {
+  if (!dshHome) return null;
+  const norm = String(dshHome).replace(/\\/g, '/');
+  return /(^|\/)dsh-test-(home|rc7|clean)(\/|$)/.test(norm);
 }
 
 export async function registerTestEnvEntry(ctx, config = {}) {
@@ -115,9 +128,16 @@ export async function registerTestEnvEntry(ctx, config = {}) {
     }
     const primaryTestPort = testPorts[0] ?? null;
 
+    // 当前实例自我识别（v1.10.0）：路径判断测试环境（DSH_HOME 含 dsh-test-*），替代端口范围
+    const selfHome = process.env.DSH_HOME || '';
+
     return {
       ok: true,
       now: new Date().toISOString(),
+      self: {
+        dshHome: selfHome,
+        isTest: isTestHomePath(selfHome),
+      },
       main: {
         port: cfg.mainPort,
         proxyPort: cfg.mainProxyPort,
