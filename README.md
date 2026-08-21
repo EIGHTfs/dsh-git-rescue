@@ -330,7 +330,7 @@ dsh-git-rescue/
 | **插件安装门禁（测试闸门代码化）** | ✅ 已实现（2026-08-20）：① 检测插件安装（扫描 cordis.patch.yml vs registry）② 复制新插件 skills/ 到 `.dsh/skills/` ③ `git-rescue/plugin-registry.json` 记录测试状态 ④ **未测试插件阻止主环境重启**（`/api/start` 返回 403 强行接管）⑤ 测试通过更新 registry 放行；存量插件默认放行（不误拦）；`/api/plugin-gate`（状态）+ `/api/plugin-gate/scan` + `/api/plugin-gate/pass` |
 | **web 快照面板（git 快照）** | ⏳ 待办（2026-08-20 EIGHTfs 提出，源自旧版「创建快照」入口）：新版 web 加「快照」面板——**手动创建快照 = git commit**（`chore(snapshot): manual`）、**快照列表 = git 提交历史**、**恢复 = git 回退**；不引入 zip 插件，与新版 git 体系一致 |
 | **远端备份库 web 入口** | ✅ 已实现（2026-08-21，P2-2）：guardian 网页新增「📦 远端备份库」卡片——显示仓库名（`dsh-git-rescue-backup`）、认证方式（token/SSH/未配置）、最近推送记录（时间/commit/文件数/方法）；**「立即推送」按钮**触发 `pushSnapshot`；每 5s 自动刷新状态 |
-| **与日志 LLM 对话** | ⏳ 待办（2026-08-21）：guardian 网页日志区增加「与 LLM 对话」功能——用户选中日志条目 → 点击对话按钮 → 输入问题 → LLM 基于日志内容回答；新增 `POST /api/llm-chat` 接口 + 前端对话 UI |
+| **与日志 LLM 对话** | ✅ 已实现（2026-08-21）：guardian 网页新增「🤖 与日志 LLM 对话」面板——点击「开始对话」打开模态框，输入问题后 LLM 基于守护进程日志分析回答；`POST /api/llm-chat` 接口 + 前端对话 UI + CSS 样式 |
 
 ## 📜 版本记录（旧版谱系 1.x，保留自 v1.13.0 README）
 
