@@ -35,8 +35,6 @@
 | 救援积分 / sudo-key / flapping / 现场捕获 | 合并评估 | 旧版能力按重构规范评估后纳入 |
 | **目录结构查看（dir-tree）** | v2.0.0 | 独立工具 `tools/dir-tree.mjs`：零依赖、全平台兼容 Node.js（不依赖 shell tree），默认只列目录 2 层（项目文件夹那一层），可 CLI 运行或 import 调用（详见 `skills/dsh-dir-tree.md`） |
 
-![体系架构](docs/screenshots/architecture.svg)
-
 ### 🖼️ 界面展示
 
 Guardian 救援守护面板（`http://<host>:3182/`）——DSH 运行状态、守护进程探活与救援记录一目了然：
@@ -185,7 +183,6 @@ dsh-git-rescue/
 │   └── dir-tree.mjs          # 独立目录结构查看工具（零依赖、全平台兼容 Node.js）
 ├── docs/
 │   ├── harness-startup-failure-log.md   # ⭐ 启动失败原因/解决方案（按类型）
-│   └── screenshots/architecture.svg     # 体系架构图
 │   └── screenshots/guardian-panel.png   # Guardian 救援面板整页截图（界面展示）
 └── test-git-rescue.mjs       # 单测
 ```
