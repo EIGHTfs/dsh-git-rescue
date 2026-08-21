@@ -1,0 +1,12 @@
+{
+  "name": "dsh-guardian",
+  "version": "1.0.0",
+  "description": "DSH 守护服务：实时监控 Harness 运行状态，启动失败自动按快照顺序回退测试，网页可手动控制恢复",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": ["server.js", "lib", "public", "start.sh"],
+  "license": "MIT"
+}

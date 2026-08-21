@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSH Guardian - 守护面板</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🛡️ DSH Guardian</h1>
+      <div class="status-line">
+        <span id="dsh-status" class="badge unknown">检测中…</span>
+        <span id="auto-flag"></span>
+      </div>
+    </header>
+
+    <section class="card" id="controls">
+      <h2>手动控制</h2>
+      <div class="btn-row">
+        <button id="btn-snapshot" class="btn primary">📸 创建快照</button>
+        <button id="btn-check" class="btn">🔍 立即检查</button>
+        <button id="btn-start" class="btn ok">▶ 启动 DSH</button>
+        <button id="btn-stop" class="btn warn">⏹ 停止 DSH</button>
+        <button id="btn-rollback" class="btn danger">↩ 触发自动回退</button>
+      </div>
+      <div id="action-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>快照列表 <span id="snap-count" class="count"></span></h2>
+      <div id="snap-list" class="list"><div class="empty">加载中…</div></div>
+    </section>
+
+    <section class="card">
+      <h2>监控日志</h2>
+      <div id="log" class="log"><div class="empty">暂无日志</div></div>
+      <button id="btn-clear-log" class="btn small">清空日志显示</button>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# dsh-git-rescue — bundle patch layer
+# git 版本管理 + 崩溃自动救援插件（仅 GitHub token 方案）
+- insert:
+    - id: git-rescue
+      name: 'dsh-git-rescue'
