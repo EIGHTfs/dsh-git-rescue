@@ -37,6 +37,12 @@
 
 ![体系架构](docs/screenshots/architecture.svg)
 
+### 🖼️ 界面展示
+
+Guardian 救援守护面板（`http://<host>:3182/`）——DSH 运行状态、守护进程探活与救援记录一目了然：
+
+![Guardian 救援面板 - 整页截图](docs/screenshots/guardian-panel.png)
+
 </div>
 
 ---
@@ -180,6 +186,7 @@ dsh-git-rescue/
 ├── docs/
 │   ├── harness-startup-failure-log.md   # ⭐ 启动失败原因/解决方案（按类型）
 │   └── screenshots/architecture.svg     # 体系架构图
+│   └── screenshots/guardian-panel.png   # Guardian 救援面板整页截图（界面展示）
 └── test-git-rescue.mjs       # 单测
 ```
 

@@ -8,3 +8,6 @@ bun.lock
 npm-debug.log*
 .npm/
 .pnpm-store/
+
+# 救援环境运行时目录（2026-08-21：固定插件项目内部 rescue-envs/，运行时生成不入库）
+rescue-envs/
