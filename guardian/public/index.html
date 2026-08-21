@@ -148,6 +148,12 @@
       <div id="log" class="log"><div class="empty">暂无日志</div></div>
       <div id="llm-chat-history" class="chat-history" style="display:none"></div>
       <div class="row mt">
+        <label style="padding:4px 8px;font-size:13px">🤖 LLM 模型</label>
+        <select id="llm-model-select" class="chat-input" style="max-width:280px"><option value="">加载中…</option></select>
+        <button class="ghost" id="btn-save-llm-model">保存模型</button>
+        <span id="llm-model-hint" style="font-size:12px;opacity:.7"></span>
+      </div>
+      <div class="row mt">
         <button class="ghost" id="btn-clear-log">清空日志显示</button>
         <input type="text" id="llm-chat-input" class="chat-input" placeholder="向 LLM 提问（基于以上日志）… 按 Enter 发送" onkeydown="if(event.key==='Enter') sendChatMessage()">
         <button class="primary" id="llm-send-btn">发送</button>

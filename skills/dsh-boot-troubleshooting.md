@@ -48,6 +48,14 @@ dmesg | tail -60          # 找 I/O error / EXT4-fs error / Remounting filesyste
 - 关键事件类型：`user/message`、`assistant/message`（正文在 `data.content[].text`）、`session/title`、`tool-result`（命令输出/报错）。
 - 判断机器是否"起过来"：看 `.dsh/git-rescue/events.jsonl`（`startup` 事件）和 `heartbeat`——若长期没有新 `startup` 事件，说明进程卡在插件加载之前的引导阶段（往往是系统层问题）。
 
+> ⚠️ 【corrupt 会话导致"启动中不崩溃"】（2026-08-22 实测）：主环境一直"启动中"且正常不崩溃，实测往往是 **3081 根本没起来、只有 3080 反代在 502**——根因是 `dsh-workspace` 插件 `list()` 扫到某个 `session.jsonl.zstd` **首帧损坏**（第一帧解压后不是"恰好一行 header"）抛错 → 引导中断。处置：
+> 1. **先实测 3081**：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3081/`（别只看前端转圈）；查主日志尾部 `corrupt Zstandard session log ... first frame is not exactly one header line`。
+> 2. **精确定位坏文件**：对每个会话 `scanZstdFrames` 定位第一帧切片 → 只解第一帧 → `assertZstdHeaderFrame`（`length===0 || indexOf(10)!==length-1` 即坏）；正常首帧 ≈200B，解出 20MB 级膨胀即损坏。
+> 3. **优先用已有好备份替换**（零丢失）：`.seq-gap-backup/` 或 `*.zstd.bak`（先 `md5sum` 确认同源）→ `cp 坏文件 坏文件.corrupt-<ts>` + `cp 好备份 主文件`。
+> 4. **替换须主 DSH 停止时做**（防运行中回写覆盖），换完**重启主 DSH 并确认 3081 真正 200**（文件对了 ≠ 实例起来了，还叠加端口/属主问题）。
+>
+> 完整帧判定与修复流程见 `zstd-session-log-repair` skill。
+
 ## 四、插件安装/重启的硬规则（配合其它 skill）
 
 1. 带浏览器半边的插件，client 导出必须在 `__ModuleLoader__.load({factory})` 的 factory 内赋值并 `return module.exports`（对照 `dsh-session-manager/lib/client.js` 的正确写法）。

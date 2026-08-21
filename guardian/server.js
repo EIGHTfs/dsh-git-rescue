@@ -37,7 +37,7 @@ import {
   packageChangedFiles, collectChangedFiles,
 } from '../lib/rescue-report.js'
 // guardian 直连 LLM 自治诊断（2026-08-20 EIGHTfs 需求：不一定要纯净环境）
-import { llmDiagnoseRescue, validateLlmAction } from '../lib/llm.js'
+import { llmDiagnoseRescue, validateLlmAction, llmMultiTurnRescue, buildRescueContext, resolveModel, resolveBaseUrl, LLM_DEFAULT, readLlmConfig, writeLlmConfig, AVAILABLE_LLM_MODELS } from '../lib/llm.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -719,37 +719,59 @@ async function recover(source = 'auto') {
       fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'exit-context', msg: ctx }) + '\n').catch(() => {})
     }
 
-    // ===== ⑥ LLM 自治修复（2026-08-21 用户要求：git 覆盖优先级最低，先 LLM 修复）=====
-    // guardian 直连 LLM 分析根因并给白名单建议（report_only / suggest_git_reset / suggest_restart / suggest_config_fix），
-    // 自动执行后探活：恢复健康即成功返回（不 git 覆盖）；失败才进入 git 覆盖兜底。
+    // ===== ⑥ LLM 自治修复（2026-08-22 升级为"多轮自治循环"，git 覆盖降为最后兜底）=====
+    // guardian 直连 LLM，喂【全量多源现场】，多轮"观察→行动→验证"迭代（像真 agent），
+    // 每轮执行白名单动作 + probe，未恢复则带新一轮证据回喂，最多 LLM_DEFAULT.maxTurns 轮。
     let llmRecovered = false
     let llmAnalysis = ''
+    const llmModel = await resolveModel(CFG.dshHome)
     try {
       const bootTail = await readLogTail(STDERR_FILE, 40)
       const gitLogR = await git(CFG.dshHome, ['log', '--oneline', '-n', '8'])
-      const llmR = await llmDiagnoseRescue({
+      // 事件流尾部（events.jsonl）作为额外证据
+      let eventsTail = ''
+      try {
+        const ev = await fs.readFile(EVENTS_FILE, 'utf8')
+        eventsTail = String(ev).split('\n').slice(-6).join('\n')
+      } catch { /* 无事件文件 */ }
+      // 插件配置是否变更（LLM 判断 plugin 层依据）
+      let configChanged = false
+      try {
+        const ch = await git(CFG.dshHome, ['diff', '--name-only', 'HEAD'])
+        configChanged = ['cordis.patch.yml', 'package.json', 'cordis.yml'].some((f) => (ch.stdout || '').includes(f) || (ch.stdout || '').includes(f.split('/').pop()))
+      } catch { /* 忽略 */ }
+      // .dsh 智能快照（用户档案/配置/事件/会话概览），让救援 LLM 有完整现场
+      let dshSnapshot = ''
+      try {
+        const { collectDshSnapshot } = await import('../lib/llm.js')
+        dshSnapshot = await collectDshSnapshot(CFG.dshHome, { maxTotalChars: 100_000 })
+      } catch { /* 快照失败不阻断救援 */ }
+      log('warn', `🤖 LLM 自治救援启动（model=${llmModel}，多轮上限 ${LLM_DEFAULT.maxTurns} 轮）`)
+      const multi = await llmMultiTurnRescue({
         dshHome: CFG.dshHome,
-        fault: faultInfo || {},
-        reason: reasonInfo || `recover-ok=false`,
-        bootLog: bootTail || '',
-        gitLog: gitLogR.ok ? gitLogR.stdout : '',
-        repairHits: repair.hits || [],
+        turn0ctx: {
+          fault: faultInfo || {},
+          dshSnapshot,
+          reason: reasonInfo || `recover-ok=false`,
+          bootLog: bootTail || '',
+          stderr: bootTail || '',
+          events: eventsTail || '',
+          gitLog: gitLogR.ok ? gitLogR.stdout : '',
+          repairHits: repair.hits || [],
+          configChanged,
+        },
+        onExecute: async (actions) => {
+          const ex = await executeLlmActions(actions)
+          for (const r of ex.results) log(r.ok ? 'info' : 'warn', `  LLM 动作结果 [${r.type}]: ${r.detail || r.error || (r.skipped ? '跳过' : '')}${r.recoveredAfter ? ' → 恢复健康' : ''}`)
+          if (ex.executed.length) log('info', `  🤖 已执行动作: ${ex.executed.join('、')}`)
+          return ex
+        },
+        probe: async () => { const p = await probeDsh(); return { ok: !!p.ok } },
       })
-      if (llmR.ok) {
-        llmAnalysis = llmR.analysis || ''
-        log('warn', `🤖 LLM 诊断: severity=${llmR.severity} | ${(llmR.analysis || '').slice(0, 160)}`)
-        for (const a of llmR.suggestedActions) {
-          log('info', `  LLM 建议动作 [${a.type}]: ${a.reason || ''}`)
-        }
-        const llmExec = await executeLlmActions(llmR.suggestedActions)
-        for (const r of llmExec.results) {
-          log(r.ok ? 'info' : 'warn', `  LLM 动作结果 [${r.type}]: ${r.detail || r.error || (r.skipped ? '跳过(仅分析)' : '')}${r.recoveredAfter ? ' → 已恢复健康' : ''}`)
-        }
-        if (llmExec.executed.length) log('info', `🤖 LLM 自动执行完成: ${llmExec.executed.join('、')}`)
-        if (llmExec.recovered) llmRecovered = true
-      } else {
-        log('warn', `LLM 诊断不可用（继续 git 兜底）: ${llmR.error || '未知'}`)
-      }
+      llmRecovered = multi.recovered
+      llmAnalysis = multi.analysis || ''
+      if (multi.turns) log('warn', `🤖 LLM 自治救援结束: ${multi.recovered ? '✅ 已恢复' : '未恢复'}（共 ${multi.turns} 轮，模型=${llmModel}）`)
+      if (!multi.recovered && multi.turns) log('warn', `    未能恢复，进入 git 兜底（⑦）`)
     } catch (e) {
       log('warn', `LLM 诊断异常（不影响后续）: ${String(e?.message ?? e)}`)
     }
@@ -958,6 +980,66 @@ async function executeLlmActions(actions, { maxActions = 3 } = {}) {
           if (ok) return { recovered: true, executed, results }
         }
         continue
+      }
+      if (act.type === 'suggest_file_write') {
+        // LLM 请求写 .dsh 内一个文件（受控，2026-08-22 用户要求给内置 LLM 写权限）。
+        // 安全护栏：仅允许 .dsh 目录内 + 文本类扩展 + 写前备份 + 重启验证失败自动回滚。
+        try {
+          const { resolve, relative } = await import('node:path')
+          const dshRoot = CFG.dshHome
+          const abs = resolve(dshRoot, act.path)
+          const relCheck = relative(dshRoot, abs)
+          // 路径必须落在 dshRoot 内（防 `..` 穿越）
+          if (relCheck.startsWith('..') || resolve(abs) === resolve(dshRoot) || relCheck.startsWith('/')) {
+            results.push({ type: 'file_write', ok: false, error: `路径越界（仅允许 .dsh 内）: ${act.path}` })
+            continue
+          }
+          // 文本类扩展白名单（配置文件）
+          const ALLOWED_EXT = ['.yml', '.yaml', '.json', '.js', '.mjs', '.md', '.cjs', '.txt', '.gitignore', '.anonymous-user-id', '.gitconfig']
+          const base = abs.split('/').pop() || ''
+          const hasDot = base === '.gitignore' || base === '.anonymous-user-id' || ALLOWED_EXT.some((e) => base.endsWith(e))
+          if (!hasDot) {
+            results.push({ type: 'file_write', ok: false, error: `拒绝非文本/非白名单扩展: ${act.path}` })
+            continue
+          }
+          // 写前备份（可回滚）
+          const bakDir = join(dshRoot, 'git-rescue', 'llm-write-backup')
+          await fs.mkdir(bakDir, { recursive: true })
+          const bakTimestamp = Date.now()
+          const backupPath = join(bakDir, `${bakTimestamp}-${abs.replaceAll('/', '_')}`)
+          let hadOriginal = false
+          try { await fs.access(abs); hadOriginal = true; await fs.copyFile(abs, backupPath) } catch { /* 原文件不存在则不备份 */ }
+          // 原子写（tmp + rename，保 owner = 运行用户）
+          const tmp = `${abs}.llm-tmp-${bakTimestamp}`
+          await fs.writeFile(tmp, act.content, { encoding: 'utf8', mode: 0o600 })
+          await fs.rename(tmp, abs)
+          executed.push(`file_write:${act.path}`)
+          log('warn', `🤖 LLM 写文件 [${act.path}]（backup:${hadOriginal ? backupPath : '无原文件'}）: ${act.reason || ''}`)
+          // 重启验证，失败回滚
+          const deadline = Date.now() + CFG.startWaitMs
+          let ok = false
+          while (Date.now() < deadline) {
+            const p = await probeDsh()
+            if (p.ok) { ok = true; break }
+            await new Promise((r) => setTimeout(r, 1000))
+          }
+          if (ok) {
+            results.push({ type: 'file_write', ok: true, detail: `已写入 ${act.path}` })
+            results[results.length - 1].recoveredAfter = true
+            return { recovered: true, executed, results }
+          }
+          // 失败回滚
+          if (hadOriginal) {
+            try { await fs.copyFile(backupPath, abs); log('warn', `🤖 写文件后 DSH 未恢复，回滚: ${act.path}`) } catch (e) { log('warn', `回滚失败 ${act.path}: ${String(e?.message ?? e)}`) }
+          } else {
+            try { await fs.rm(abs, { force: true }); log('warn', `🤖 写文件后 DSH 未恢复，删除新文件: ${act.path}`) } catch { /* 忽略 */ }
+          }
+          results.push({ type: 'file_write', ok: false, error: `写入后未恢复，已回滚 ${act.path}` })
+          continue
+        } catch (e) {
+          results.push({ type: 'file_write', ok: false, error: `file_write 执行异常: ${String(e?.message ?? e)}` })
+          continue
+        }
       }
       if (act.type === 'suggest_config_fix') {
         // 仅执行 repair-tools 已知修复（fixId 白名单内）；不执行任意配置写入
@@ -1591,15 +1673,22 @@ function startWeb() {
         }
         return send(res, r.ok ? 200 : (r.needAdmin ? 403 : 500), r)
       }
-      // ===== 与日志 LLM 对话（2026-08-21 新增）=====
+      // ===== 与日志 LLM 对话（2026-08-21 新增；2026-08-22 注入 .dsh 智能快照，让内置 LLM 认识用户/看配置）=====
       if (path === '/api/llm-chat' && req.method === 'POST') {
         // 用户输入问题 → LLM 基于日志回答（纯文本模式，不强制 JSON）
         const body = await readJson(req)
-        const { llmChat } = await import('../lib/llm.js')
+        const { llmChat, collectDshSnapshot } = await import('../lib/llm.js')
         const logContext = body?.logContext || state.log.slice(-50).map((e) => `[${e.timeLocal || e.time}] ${e.level}: ${e.msg}`).join('\n')
         const question = body?.question || '请分析上述日志'
-        const systemPrompt = `你是 DSH (DeepSeek Harness) 救援助手。用户会提供守护进程日志和你的问题，你需要基于日志内容回答问题或提供建议。直接输出回答正文（Markdown 格式），不要输出 JSON，不要加"助手:"之类前缀。`
-        const userPrompt = `【守护进程日志】\n${logContext}\n\n【用户问题】\n${question}`
+        // 注入 .dsh 智能快照（用户档案/配置/事件/会话概览，脱敏），让内置 LLM 有完整现场
+        let dshSnapshot = ''
+        try {
+          dshSnapshot = await collectDshSnapshot(CFG.dshHome, { maxTotalChars: 120_000 })
+        } catch (e) {
+          dshSnapshot = `（.dsh 快照读取失败: ${String(e?.message ?? e)}）`
+        }
+        const systemPrompt = `你是 DSH (DeepSeek Harness) 救援助手。你会收到：(1) 本机 .dsh 目录的智能快照，(2) 守护进程日志，(3) 用户问题。\n【重要】快照的第一节【用户档案(remember-me, 脱敏)】就是本机用户的身份档案，包含称呼/曾用名/设备侧名字/用户画像/规矩。当用户问"我是谁/你是谁/我是什么人"等身份问题时，必须从这一节提取回答（如称呼 EIGHTfs 等），而不是说"没有用户档案"。\n直接输出回答正文（Markdown），不要输出 JSON，不要加"助手:"前缀。`
+        const userPrompt = `【.dsh 快照】\n${dshSnapshot}\n\n【守护进程日志】\n${logContext}\n\n【用户问题】\n${question}`
         const r = await llmChat({ dshHome: CFG.dshHome, system: systemPrompt, user: userPrompt, jsonMode: false })
         if (r.ok) {
           log('info', `LLM 对话: ${question.slice(0, 50)}...`)
@@ -1608,6 +1697,24 @@ function startWeb() {
           log('warn', `LLM 对话失败: ${r.error}`)
           return send(res, 500, { ok: false, error: r.error })
         }
+      }
+      // ===== LLM 模型配置（2026-08-22 web 可选择模型）=====
+      if (path === '/api/llm/models' && req.method === 'GET') {
+        const cfg = await readLlmConfig(CFG.dshHome)
+        return send(res, 200, { ok: true, models: AVAILABLE_LLM_MODELS, current: cfg.model || '' })
+      }
+      if (path === '/api/llm/config' && req.method === 'GET') {
+        const cfg = await readLlmConfig(CFG.dshHome)
+        return send(res, 200, { ok: true, config: cfg, effective: await resolveModel(CFG.dshHome), baseURL: await resolveBaseUrl(CFG.dshHome) })
+      }
+      if (path === '/api/llm/config' && req.method === 'POST') {
+        const body = await readJson(req)
+        const r = await writeLlmConfig(CFG.dshHome, { model: body?.model, baseURL: body?.baseURL })
+        if (r.ok) {
+          log('info', `LLM 模型已设置: ${body?.model || '(默认)'}${body?.baseURL ? ` @ ${body.baseURL}` : ''}`)
+          return send(res, 200, { ok: true, model: body?.model || null })
+        }
+        return send(res, 500, { ok: false, error: r.error || '保存失败' })
       }
       return send(res, 404, { ok: false, error: `unknown route ${path}` })
     } catch (e) {

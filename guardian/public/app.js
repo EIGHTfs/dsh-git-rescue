@@ -518,6 +518,37 @@
     // LLM 对话（内联：日志区底部对话框 + 发送按钮）
     const sendBtn = document.getElementById('llm-send-btn');
     if (sendBtn) sendBtn.addEventListener('click', sendChatMessage);
+    // LLM 模型选择（2026-08-22）
+    setupLlmModelSelect();
+  }
+
+  // ===== LLM 模型选择（2026-08-22 web 可选模型）=====
+  async function setupLlmModelSelect() {
+    const sel = document.getElementById('llm-model-select');
+    const saveBtn = document.getElementById('btn-save-llm-model');
+    const hint = document.getElementById('llm-model-hint');
+    if (!sel) return;
+    try {
+      const m = await api('/api/llm/models', 'GET');
+      if (m.ok && Array.isArray(m.models)) {
+        sel.innerHTML = '<option value="">默认（resolveModel）</option>' +
+          m.models.map((x) => `<option value="${escapeHtml(x.model)}">${escapeHtml(x.label || x.model)}</option>`).join('');
+        if (m.current) sel.value = m.current;
+      }
+      const c = await api('/api/llm/config', 'GET');
+      if (c.ok && c.effective) hint.textContent = '当前生效: ' + c.effective + (c.baseURL ? ' · ' + c.baseURL : '');
+    } catch (e) {
+      hint.textContent = '模型配置加载失败';
+    }
+    if (saveBtn) saveBtn.addEventListener('click', async () => {
+      const model = sel.value;
+      const r = await api('/api/llm/config', 'POST', { model });
+      if (r.ok) {
+        hint.textContent = '已保存: ' + (model || '默认') + '（下次调用生效）';
+      } else {
+        hint.textContent = '❌ 保存失败: ' + (r.error || '');
+      }
+    });
   }
 
   // ===== 与日志 LLM 对话（2026-08-21）=====
