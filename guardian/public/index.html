@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DSH Guardian - 救援面板</title>
+<link rel="stylesheet" href="/style.css?v=20260821-3">
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center">
+    <h1>🛡️ dsh-git-rescue Guardian</h1>
+    <span class="sub">DSH 救援守护面板</span>
+  </div>
+  <div class="right">
+    <span id="dsh-status" class="badge unknown">检测中…</span>
+    <span id="auto-flag" class="sub"></span>
+  </div>
+</header>
+
+<div id="restart-request-flag" class="flag warn" style="display:none"></div>
+<div id="manual-stop-flag" class="flag warn" style="display:none"></div>
+
+<div class="container">
+
+  <!-- ============ 救援环境安装器 ============ -->
+  <div class="group" id="group-installer">
+    <div class="group-head">🛠 救援环境安装器（拉最新源码 → 装测试/纯净环境）</div>
+    <div class="group-body">
+      <div id="installer-status" class="status">读取中…</div>
+      <div class="row mt">
+        <label class="hint"><input type="checkbox" id="installer-target-test" checked style="accent-color:var(--accent)"> 测试环境</label>
+        <label class="hint"><input type="checkbox" id="installer-target-clean" checked style="accent-color:var(--accent)"> 纯净环境</label>
+      </div>
+      <div class="row mt">
+        <button class="primary" id="installer-run">🛠 拉取最新并安装</button>
+      </div>
+      <div id="installer-msg" class="status"></div>
+    </div>
+  </div>
+
+  <!-- ============ 守护进程重启方案 ============ -->
+  <div class="group" id="group-protection">
+    <div class="group-head">🛡️ 守护进程重启方案（可多选，共同启用）</div>
+    <div class="group-body">
+      <div class="hint">guardian 进程被杀时，勾选的方案共同守护自动重启（多保险叠加）。systemd 在本环境不可用会置灰。</div>
+      <div id="prot-list" class="prot-list"></div>
+      <div class="row mt">
+        <button class="success" id="prot-save">💾 保存并应用方案</button>
+      </div>
+      <div id="prot-msg" class="status"></div>
+    </div>
+  </div>
+
+  <!-- ============ 手动控制 ============ -->
+  <div class="group" id="group-control">
+    <div class="group-head">🎛 手动控制</div>
+    <div class="group-body">
+      <div class="row">
+        <button class="ghost" id="btn-check">🔍 立即检查</button>
+        <button class="success" id="btn-start">▶ 启动 DSH</button>
+        <button class="ghost" id="btn-stop">⏹ 停止 DSH</button>
+        <button class="danger" id="btn-recover">↩ 手动救援（git 回退）</button>
+      </div>
+      <div class="status" id="action-msg"></div>
+    </div>
+  </div>
+
+  <!-- ============ 远端认证 ============ -->
+  <div class="group" id="group-auth">
+    <div class="group-head">🔑 远端认证（GitHub token）</div>
+    <div class="group-body">
+      <div id="auth-status" class="status">读取中…</div>
+      <div class="row mt">
+        <input type="password" id="token-input" placeholder="粘贴 GitHub token（仅本地保存，600 权限）" style="flex:1;min-width:220px">
+        <button class="success" id="btn-save-token">保存 token</button>
+      </div>
+      <div class="status" id="auth-msg"></div>
+    </div>
+  </div>
+
+  <!-- ============ 管理员密码 ============ -->
+  <div class="group" id="group-admin">
+    <div class="group-head">🛡️ 管理员密码（系统提权：Windows / macOS / Linux root）</div>
+    <div class="group-body">
+      <div id="admin-pw-status" class="status">读取中…</div>
+      <div class="row mt">
+        <input type="password" id="admin-pw-input" placeholder="Windows 管理员 / macOS / Linux root 密码（仅本机保存，600 权限，不进 git）" style="flex:1;min-width:220px">
+        <button class="success" id="btn-save-admin-pw">保存密码</button>
+        <button class="ghost" id="btn-clear-admin-pw">清除</button>
+      </div>
+      <div class="status" id="admin-pw-msg"></div>
+    </div>
+  </div>
+
+  <!-- ============ 远端备份 ============ -->
+  <div class="group" id="group-backup">
+    <div class="group-head">📦 远端备份（GitHub）</div>
+    <div class="group-body">
+      <div id="backup-status" class="status">读取中…</div>
+      <div id="backup-info" class="snap" style="display:none;margin-top:8px">
+        <span class="id" id="backup-repo"></span>
+        <span class="meta" id="backup-meta"></span>
+      </div>
+      <div class="hint mt">备份内容：profile 必选，其余可多选</div>
+      <div id="bs-cats" class="bs-cats"></div>
+      <div class="row mt">
+        <button class="success" id="bs-save">💾 保存选择</button>
+        <button class="ghost" id="bs-apply">📝 应用 .gitignore</button>
+        <button class="primary" id="bs-push">🚀 按选择推送备份</button>
+      </div>
+      <div class="status" id="bs-msg"></div>
+    </div>
+  </div>
+
+  <!-- ============ 从远端拉取恢复 ============ -->
+  <div class="group" id="group-fetch">
+    <div class="group-head">📥 从远端拉取恢复</div>
+    <div class="group-body">
+      <div class="hint">从 GitHub 备份库 <span class="mono">dsh-git-rescue-backup/&lt;设备ID&gt;/</span> 下载恢复本地 .dsh（覆盖写入）</div>
+      <div class="row mt">
+        <button class="ghost" id="fetch-list">🔍 预览远端文件</button>
+        <button class="danger" id="fetch-restore">📥 拉取并覆盖恢复</button>
+      </div>
+      <div id="fetch-status" class="status"></div>
+      <div id="fetch-list-box" class="list" style="display:none;margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- ============ git 提交历史 ============ -->
+  <div class="group" id="group-gitlog">
+    <div class="group-head">📜 git 提交历史 <span id="git-count" class="sub"></span></div>
+    <div class="group-body">
+      <div id="git-list" class="list"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- ============ 监控日志 ============ -->
+  <div class="group" id="group-log">
+    <div class="group-head">📋 监控日志</div>
+    <div class="group-body">
+      <div id="log" class="log"><div class="empty">暂无日志</div></div>
+      <div class="row mt">
+        <button class="ghost" id="btn-clear-log">清空日志显示</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script src="/app.js?v=20260821-3"></script>
+</body>
+</html>

@@ -4,8 +4,6 @@ description: DSH 快照 + 守护体系部署总览（历史权威文档）。记
 whenToUse: 需要了解本机 DSH 快照与守护体系（snapshot-archive + guardian）的部署结构、设计决策、安装状态，或接手这两个项目时。
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # DSH 快照 + 守护体系部署总览（dsh-deployment-overview）
 
 > 来源：workspace/DEPLOYMENT-OVERVIEW.md（原权威文档，转 skill 版）。注意：此文档描述的是**早期 snapshot-archive + guardian** 体系；后续已演进为 dsh-git-rescue（git 版本管理 + 崩溃自动救援），两者并存时以 git-rescue 为主。

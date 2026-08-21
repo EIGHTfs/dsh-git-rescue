@@ -5,8 +5,6 @@ whenToUse: 需要文档化两个插件之间的联动关系、创建/修改 skil
 generatedBy: user-request 2026-08-20（EIGHTfs：a联动b，a中是skill.b.md）
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # 联动 skill 规范（linkage-skill-convention）
 
 > 2026-08-20 用户（EIGHTfs）确立。约束所有 AI 所有会话。

@@ -5,8 +5,6 @@ whenToUse: 在测试/纯净/救援环境会话中改了代码需要交接主环�
 generatedBy: user-request 2026-08-20（EIGHTfs：a联动b，a中是skill.b.md；契约独立存）
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # git-rescue 联动 dsh-tasklist（契约）
 
 > 联动方向：**git-rescue ──▶ dsh-tasklist**（测试环境会话改动走清单交接）

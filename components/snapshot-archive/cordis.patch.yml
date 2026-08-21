@@ -1,5 +1,0 @@
-# dsh-snapshot-archive — bundle patch layer
-# 独立快照插件：zip 归档 + 原始目录结构 + 跨平台恢复
-- insert:
-    - id: snapshot-archive
-      name: 'dsh-snapshot-archive'

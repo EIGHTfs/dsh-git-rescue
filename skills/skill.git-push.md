@@ -5,8 +5,6 @@ whenToUse: 在测试环境会话中需要提交 git、收到门禁拦截提示�
 generatedBy: user-request 2026-08-20（EIGHTfs：a联动b，a中是skill.b.md；契约独立存）
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # git-rescue 联动 git-push（契约）
 
 > 联动方向：**git-rescue ──▶ git-push**（测试环境提交受其门禁约束）

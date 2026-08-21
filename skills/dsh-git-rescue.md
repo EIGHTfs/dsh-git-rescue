@@ -4,31 +4,49 @@ description: DSH git 版本管理 + 崩溃自动救援项目（EIGHTfs/dsh-git-r
 whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏测试、崩溃记录整理、备份仓库配置、宣传发帖、商店上线、主实例部署，或复盘本项目的崩溃/救援实测数据时
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # dsh-git-rescue 项目指南
 
 > 经验来源：2026-08-18 开发实测 + 仓库 `docs/crash-records-test-env.md`（测试环境崩溃记录）+ `docs/harness-startup-failure-log.md`（生产启动失败史）。核心原则：**历史即资产，救援 = git 回退，测试 = 故意破坏**。
 
 ## 一、项目结构与版本
 
-仓库 `EIGHTfs/dsh-git-rescue`（main），三合一合并后结构：
+> **2026-08-20 完全重构 → 2.0.0**（大版本换代：旧 1.x 系列最高 1.13.0，新结构 = 大版本 +1 → 2.0.0，见 versioning-rule 第三节）。
+> 仓库位置改为 `/vol1/@appshare/DeepSeekHarness/任务/dsh-git-rescue`（本会话工作区，重构起点）。
+> 结构从三合一（components/ 子树）改为**单组件根级结构**。
+
+仓库 `EIGHTfs/dsh-git-rescue`（main），**2.0.0 单组件根级结构**：
 
 ```
-├── README.md                 # 设计原理/设计溯源/测试体系门面
+dsh-git-rescue/
+├── package.json              # 2.0.0
+├── cordis.patch.yml          # 插件注册（bundle patch 自注册）
+├── README.md                 # 2.0.0 设计原理/救援逻辑
+├── lib/                      # ⭐ 根级 lib（结构换代标志）
+│   ├── index.js              # 插件入口（API + Agent 工具）
+│   ├── git.js / github.js / device.js / probe.js / flapping.js
+│   ├── process-capture.js / fault-classify.js
+│   ├── rescue-env.js         # 救援环境（<版本>@Save-clean / @Save-test）
+│   ├── save-lock.js          # 纯净环境防装插件锁定
+│   ├── repair-tools.js       # 专项恢复工具（⑤）
+│   ├── boot-startup.js       # 开机自启（③，命令在 .dsh 目录这一层）
+│   └── self-update.js        # 自动更新（含大版本换代判定 majorUpgrade）
+├── guardian/
+│   ├── server.js             # 独立守护进程
+│   ├── guardian-boot.sh      # 开机自启脚本
+│   └── public/               # 控制台网页
+├── skills/                   # 插件 skill 档案（12 个全部保留）
 ├── docs/
-│   ├── harness-startup-failure-log.md   # 生产环境无法启动史（14 片段 + 3 显式失败）
-│   └── crash-records-test-env.md        # 测试环境崩溃/救援实录
-└── components/
-    ├── snapshot-archive/     # 组件 A：zip 快照（原仓库已删，仅留存）
-    ├── guardian/             # 组件 B：zip 版守护（原仓库已删，仅留存）
-    └── git-rescue/           # 组件 C v1.2.2：git 版本管理插件 + git 版 guardian（核心）
-        ├── lib/{index,git,github,device}.js
-        ├── guardian/server.js + public/  # 独立救援进程 + web 控制台
-        └── test-git-rescue.mjs
+│   └── harness-startup-failure-log.md   # ⭐ 启动失败原因/解决方案（按类型）
+└── test-git-rescue.mjs       # 单测
 ```
 
-**版本记录**（遵循 versioning-rule，X.Y.Z = 功能序号.修复次数）：
+**2.0.0 版本记录**（遵循 versioning-rule，含大版本换代判定）：
+
+| 版本 | 内容 |
+|------|------|
+| 2.0.0 | **完全重构（大版本换代）**：纯救援定位——仅保留守护进程 + git 仓库恢复。① .dsh 单仓库管理（会话/skill 不丢）② 远端私有库 `.dsh@<dsh版本>.<设备ID>`（token/SSH 双方案）③ 开机自启（命令在 .dsh 目录层）④ 救援环境 `<版本>@Save-clean/@Save-test` + save-lock 防装插件 ⑤ 专项恢复工具（repair-tools：plugin_config/boot_symlink/ro_volume/plugin_load）⑥ git 还原 ⑦ 纯净 dsh 协助；**自更新从 2.0.0 起具备 + majorUpgrade 大版本换代判定**（结构不同 = 大版本+1，旧结构版本不自动更新）；破坏测试 5/5 通过 |
+
+**旧 1.x 版本记录**（重构前，仅供追溯）：
 
 | 版本 | 内容 |
 |------|------|
@@ -62,6 +80,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 - 配置全环境变量：DSH_PORT/DSH_HOME/GUARDIAN_PORT/GUARDIAN_INTERVAL_MS/GUARDIAN_FAIL_THRESHOLD/DSH_START_CMD/GUARDIAN_SESSION_LIST_PATH/GUARDIAN_PRERESTART_WINDOW_MS
 - **v1.13.0 透明代理守护（3080）**：DSH 健康分支每轮 tick 调 `ensureProxy()`——`findProxyPid()` 用 `ss -tlnp` **按监听端口**找 proxy（不是 ps 全局匹配！防把 3080 误判成测试 3093 等），缺失则 `startProxy()` spawn 官方 proxy.js（env 注入 PROXY_LISTEN_PORT/TARGET_PORT，stderr 落盘）；`state.proxy='starting'` 30s 内不重复 spawn。**坑（实测抓到的 bug）**：不能只在 `state.proxy !== 'running'` 时才检查——proxy 掉线后 state 缓存仍是 running，永远不再拉起；必须每轮无条件实时查端口
 - **v1.12.0 救援前自更新**：recover 开头最先执行 `selfUpdateBeforeRecover()`——checkForUpdate（联网 api.github.com）→ 有新版 applyUpdate（替换磁盘插件文件，当前进程仍旧代码，重启后生效）→ 继续救援；失败不阻断；`GUARDIAN_SELF_UPDATE=0` 关闭。⚠️ **改代码必须同步升版本号**（applyUpdate 按 `compareVersions(remote, installed) > 0` 才覆盖，本地版本 >= 远端即不会被自更新冲掉）
+- **v2.0.0 majorUpgrade 大版本换代判定（2026-08-20 约定固化）**：`checkForUpdate()` 版本来源探测**根级 package.json 优先 + 旧位置 components/git-rescue/package.json 回退**（如实报告远端版本号，如 1.13.0）；结构校验远端根必须存在 `lib/index.js` → 结构不同 = **大版本换代（majorUpgrade=true，本地=旧系列大版本+1）** → **旧结构版本不自动更新**（applyUpdate 拒绝，防旧结构覆盖新代码）。⚠️ 看到远端旧结构高版本号（1.x）**不是误判**——版本号更高是事实（updateAvailable=true），但 majorUpgrade=true 表示不可自动更新，需人工/等新版本提交
 - **v1.11.0 前置闸门（recover 开头，自动/手动都过）**：
   - 测试环境（`isTestHomePath(DSH_HOME)` 命中 `dsh-test-*`）→ **不救援**：保留现场（stderr+TERM 上下文）+ 事件 + 冷却，返回 `{testEnv:true, blocked:'test-env-no-rescue'}`——插件编写导致的崩溃由开发者自行解决
   - 活跃对话检测：`GET /api/session-manager/list`（装了 session-manager）→ 任一 `running||continueRunning` 即拦截；404（未装）→ 降级 `zstdcat` 扫描 sessions 事件流（尾部 turn/start 未 end = running）；fetch 失败（DSH down）→ 视为无活跃，正常救援
@@ -93,32 +112,6 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 - ⚠️ **共享测试环境 dsh-test-home 可能被其他会话占用**（实测：dsh-ai-work-archive 插件在开发中且曾导致实例启动失败）——做对照/隔离测试优先用 dsh-clean-env 的独立环境，不要动共享测试环境的 cordis.patch.yml
 - ⚠️ **主实例 test-sync 类插件会自动重启测试实例**（监听测试实例 cordis.patch.yml 变更）——崩溃测试前先确认无此类干扰，或禁用
 - 单测运行：`GITHUB_TOKEN=xxx node test-git-rescue.mjs`（T6 真实推送需 token；当前 23/23 通过）
-
-## 三·补、开发流程纪律：测试环境开发，验收后同步（2026-08-20 确立，硬规则）
-
-> **本地任何在开发中的项目（插件及其他）统一在测试环境完成 分析→开发→测试→验收，验收合格后同步回本地环境，待确认。本规则只做 skill 约束，不要求代码级实现。**
-
-```
-分析 → 开发 → 测试 → 验收 → 验收合格 → 同步回本地环境 → 待确认
-（全程在测试环境完成）           （合格才同步）          （同步后确认）
-```
-
-| 阶段 | 在哪里做 | 要求 |
-|------|----------|------|
-| **分析** | 测试环境 | 先按 feature-idea-proactive-analysis 分析可行性/方案/风险，写 README 待办（feature-todo-readme-cycle），不直接写码 |
-| **开发** | 测试环境 | 在测试环境开发代码，不动主环境部署副本 |
-| **测试** | 测试环境 | 单测 + 测试实例实测（故意破坏矩阵/功能验证） |
-| **验收** | 测试环境 | 全部通过 + 确认验收 |
-| **同步回本地** | 验收合格后 | 同步部署副本到本地/主环境（走 dsh-deploy-gate / dsh-plugin-main-install 规范） |
-| **待确认** | 同步后 | 同步完成告知，确认后才算最终完成 |
-
-**铁律**：
-1. **测试环境是唯一开发场地**——分析/开发/测试/验收全程在测试实例（3083-3182 / dsh-clean-env 独立基线），**禁止直接改主环境部署副本**；适用范围 = 本地**所有在开发中的项目**（不止插件）
-2. **验收合格才同步**——四步全过 + 验收后才同步回本地环境；未验收 = 不同步
-3. **同步后待确认**——同步回本地不是终点，要告知并等确认
-4. **只做此约束，无代码级限制**——本规则是纯 skill 约束（不要求做成代码级工具/API/guardian 自动执行；与 skill-code-parity 的「补代码级」不同，明确不要代码级）
-5. **与 deploy-gate 一致**：主环境部署必须过闸门（测试验证/版本 1.x/node --check/测试实例在线）
-6. **对照 dsh-git-rescue 自身**：本插件在测试环境测破坏矩阵、验收后同步——同一纪律适用所有项目
 
 ## 四、已知坑（实测踩坑记录）
 
@@ -181,3 +174,13 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 | **组件 B guardian（zip 版守护）** | ✅ **实测通过（2026-08-18）**：多快照逐个回退验证——新快照(坏配置)恢复后启动失败被跳过 → 旧快照(好配置)恢复 → 启动成功。⚠️ 设计注意：B **不读 `DSH_HOME` 环境变量**，快照源写死 `$HOME/.dsh/snapshot-archive/<profile>`，测试/部署需用 `HOME` 指向正确位置（或用它自带配置文件时注意） |
 | sessions 基线+增量策略 | ⚠️ 未实现（后续优化项） |
 | 主实例安装 | ⚠️ 未做（主实例只读，待 GUI 确认） |
+
+## 九、救援经验（2026-08-20 外部救援 AI 学习融入）
+
+1. **import 冒烟必须做**：node --check 只查语法，查不出裸 `test` 类 ESM 加载崩溃（v1.19.0 事故根因）。部署前必须真实 `await import()` 验证 apply/inject（单测 T10 已固化）。
+2. **root 改配置后必须 chown**：任何用 root 修改 .dsh/profiles/web 配置（package.json/cordis.patch.yml）后，必须 `chown -R deepseek-harness + chmod 644`，否则 EACCES 拦启动（repair-tools 已新增 permission 工具自动修）。
+3. **高峰续跑需 peak-resume**：高峰时段（09-14）自动续跑被暂停（peak-hour-economy），崩溃恢复后要续跑中断会话需先 `peak-resume`。
+4. **OOM 隐藏根因**：数据写坏时启动吃满 Node 默认 2GB heap → SIGABRT。用 `NODE_OPTIONS=--max-old-space-size=4096`（runner 继承）——guardian 拉起 DSH 时应带此参数防 OOM 循环。
+5. **corrupt session log**：会话 header cwd 与目录编码不匹配（跨机导入/插件 tmp 会话）→ 按 DSH projectKey 规则移动目录或删除 tmp 会话。
+2026-08-20: 救援成功: 回退到 8674a61（fault=unknown, reason=无法判定故障类型，保守走 git 回退）
+2026-08-20: 救援成功: 回退到 ae17e1f（fault=unknown, reason=无法判定故障类型，保守走 git 回退）

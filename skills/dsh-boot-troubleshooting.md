@@ -4,8 +4,6 @@ description: 【dsh-git-rescue 插件 skill（2026-08-20 从通用目录迁入�
 whenToUse: DSH 启动失败、无限重启、重启没报错但进不去、浏览器白屏、Read-only file system、exists and is not a symlink、invalid plugin、Failed to load plugins、需要读历史会话日志定位报错时。
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # DSH 启动失败排查与修复（dsh-boot-troubleshooting）
 
 > 经验来源：2026-08-19 原机（10.10.10.121）dsh-host-perf 插件事故 + 无限重启实战排查。

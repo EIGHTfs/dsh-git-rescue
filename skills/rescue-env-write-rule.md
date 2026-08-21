@@ -5,8 +5,6 @@ whenToUse: 在测试环境/纯净环境（DSH_HOME 含 dsh-test-*）执行备份
 generatedBy: user-request 2026-08-20（EIGHTfs：救援环境禁止在自己目录写，在主实例写）
 ---
 
-> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
-
 # 救援恢复权威规则（rescue-env-write-rule）
 
 > 2026-08-20 用户（EIGHTfs）确立。约束所有 AI 所有会话。
