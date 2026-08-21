@@ -1,7 +1,7 @@
 {
   "name": "dsh-git-rescue",
-  "version": "2.1.0",
-  "description": "DSH 救援恢复插件（2.1.0：git 回退降为最后兜底，自带模块/LLM 优先修复；救援环境统一 @Save-clean/@Save-test 新命名）：守护进程 + .dsh git 仓库管理 + 远端备份（token/SSH）+ 救援环境 + 专项工具 + LLM 自治修复 + git 还原（配置类路径，sessions/storages 数据不被覆盖）+ 纯净 dsh 协助兜底 + 自动更新（大版本/结构不一致卸载重装）",
+  "version": "2.2.0",
+  "description": "DSH 救援恢复插件（2.2.0：手动关闭自动救援开关 + guardian 手动恢复会话；2.1.0：git 回退降为最后兜底，自带模块/LLM 优先修复；救援环境统一 @Save-clean/@Save-test 新命名）：守护进程 + .dsh git 仓库管理 + 远端备份（token/SSH）+ 救援环境 + 专项工具 + LLM 自治修复 + git 还原（配置类路径，sessions/storages 数据不被覆盖）+ 纯净 dsh 协助兜底 + 自动更新（大版本/结构不一致卸载重装）",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

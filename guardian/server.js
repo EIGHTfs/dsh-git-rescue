@@ -1,5 +1,5 @@
 /**
- * dsh-git-rescue 2.1.0 guardian — 独立守护进程（③⑤⑥⑦）
+ * dsh-git-rescue 2.2.0 guardian — 独立守护进程（③⑤⑥⑦）
  *
  * 独立于 DSH 运行（DSH 崩了它照样活着）。功能：
  * 1. 定时健康检查 DSH（GET http://<host>:<port>）
@@ -38,6 +38,8 @@ import {
 } from '../lib/rescue-report.js'
 // guardian 直连 LLM 自治诊断（2026-08-20 EIGHTfs 需求：不一定要纯净环境）
 import { llmDiagnoseRescue, validateLlmAction } from '../lib/llm.js'
+// 会话恢复联动（2.5.0：guardian 网页/API 手动恢复中断会话，走 session-manager scan）
+import { linkSessionRecovery } from '../lib/session-link.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -100,6 +102,7 @@ const state = {
   manualBusy: false,
   flappingCooldownUntil: null,
   manualStop: false,         // 手动停止标志：为 true 时 tick 不累计失败、不自动拉起（补回旧版 /api/stop 功能）
+  autoRecoverOff: false,     // 手动关闭自动救援标志（2.5.0）：网页/API 运行时切换——为 true 时 DSH 崩溃只保留现场+事件，不自动 git 回退/拉起（guardian 进程不退出）
   gateInitialized: false,    // 自动续跑闸门是否已初始化（首次恢复健康时置 closed，2026-08-20）
   // 最近一次故障分类上下文（tick 里 classifyFault 后暂存，recover 里用于诊断报告/救机清单）
   lastFault: null,
@@ -1050,6 +1053,22 @@ async function tick() {
   const level = p.level || 'down'
   log('warn', `健康检查失败[${level}]（连续 ${state.failCount}/${CFG.failThreshold}）`)
   if (state.failCount >= CFG.failThreshold) {
+    // 2.5.0：手动关闭自动救援——DSH 崩溃时只保留现场+事件，不 git 回退/拉起（guardian 进程保持运行，网页/API 仍可用）
+    if (state.autoRecoverOff) {
+      log('warn', `⏸ 自动救援已手动关闭（autoRecoverOff=true）——保留现场，不自动 git 回退/拉起；请在 guardian 网页点「开启自动救援」或 POST /api/auto-recover 恢复`)
+      try {
+        const pid = await findDshPid()
+        if (pid || (await readLogTail(STDERR_FILE, 1))) {
+          const ctx = await captureExitContext(pid, CFG.dshPort, { stderrFile: STDERR_FILE })
+          log('warn', `退出现场（自动救援已手动关闭，仅保留现场）:\n${ctx}`)
+          fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'exit-context', msg: ctx }) + '\n').catch(() => {})
+        }
+      } catch { /* 现场捕获失败不影响 */ }
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'auto-recover-off', msg: '手动关闭自动救援：达到失败阈值但不救援（现场已保留）' }) + '\n').catch(() => {})
+      state.failCount = 0
+      state.flappingCooldownUntil = Date.now() + CFG.flappingWindowMs
+      return
+    }
     if (CFG.autoRecover) {
       // P0/P1 故障分类：先分清"能回退"与"不能回退"再决定救援方式
       const fault = await classifyFault({
@@ -1150,6 +1169,7 @@ function startWeb() {
             failCount: state.failCount, lastRecoveryAt: state.lastRecoveryAt,
             lastRecoveryResult: state.lastRecoveryResult,
             manualStop: state.manualStop,
+            autoRecoverOff: state.autoRecoverOff,   // 2.5.0：手动关闭自动救援状态
             flapping: { restarts: flapping.restarts, cooldownUntil: state.flappingCooldownUntil },
           },
           config: CFG,
@@ -1523,6 +1543,25 @@ function startWeb() {
         // 旧版 /api/stop 功能补回（2026-08-20）：SIGTERM 优雅停止；置 manualStop 暂停自动拉起
         const r = await stopDsh()
         return send(res, r ? 200 : 500, { ok: r })
+      }
+      // ===== 手动关闭自动救援（2.5.0：不杀 guardian，运行时切换；测试插件防自动救援干扰）=====
+      if (path === '/api/auto-recover' && req.method === 'GET') {
+        return send(res, 200, { ok: true, enabled: !state.autoRecoverOff, autoRecoverOff: state.autoRecoverOff })
+      }
+      if (path === '/api/auto-recover' && req.method === 'POST') {
+        const body = await readJson(req).catch(() => ({}))
+        const enabled = body?.enabled !== false // 默认开启；POST {enabled:false} 关闭
+        state.autoRecoverOff = !enabled
+        log('warn', `🛑 自动救援已${enabled ? '开启' : '手动关闭'}（autoRecoverOff=${state.autoRecoverOff}）——${enabled ? 'DSH 崩溃将自动 git 回退/拉起' : 'DSH 崩溃只保留现场，不自动 git 回退/拉起（guardian 进程保持运行）'}`)
+        fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'auto-recover-toggle', msg: `autoRecover=${enabled}` }) + '\n').catch(() => {})
+        return send(res, 200, { ok: true, enabled, autoRecoverOff: state.autoRecoverOff })
+      }
+      // ===== 手动恢复会话（2.5.0：guardian 网页/API 触发 session-manager scan 恢复中断会话）=====
+      if (path === '/api/session-recover' && req.method === 'POST') {
+        const body = await readJson(req).catch(() => ({}))
+        const r = await linkSessionRecovery({ action: 'scan', reason: body?.reason || 'guardian-manual' })
+        log(r.linked ? 'info' : 'warn', `♻ 手动恢复会话: ${r.detail || '已触发'}`)
+        return send(res, r.ok ? 200 : (r.skipped ? 200 : 500), { ok: r.ok, linked: r.linked, skipped: r.skipped, detail: r.detail || '' })
       }
       if (path === '/api/plugin-gate/scan' && req.method === 'POST') {
         // 插件门禁扫描（2026-08-20）：检测新插件 → 复制 skill → 标记 pending

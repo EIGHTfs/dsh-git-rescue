@@ -62,7 +62,13 @@
         <button class="ghost" id="btn-stop">⏹ 停止 DSH</button>
         <button class="danger" id="btn-recover">↩ 手动救援（git 回退）</button>
       </div>
+      <div class="row mt">
+        <button class="success" id="btn-recover-session">♻ 恢复中断会话</button>
+        <button class="danger" id="btn-auto-recover-off">⏸ 关闭自动救援</button>
+        <button class="success" id="btn-auto-recover-on" style="display:none">▶ 开启自动救援</button>
+      </div>
       <div class="status" id="action-msg"></div>
+      <div class="hint mt">测试插件时点「关闭自动救援」：DSH 崩溃只保留现场不自动回退（guardian 进程保持运行），测完点「开启自动救援」恢复。</div>
     </div>
   </div>
 

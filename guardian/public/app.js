@@ -48,6 +48,16 @@
     $('auto-flag').textContent = r.testHome
       ? '(测试环境：自动救援已禁用，崩溃由开发者自行解决)'
       : (r.config.autoRecover ? '(自动救援 开)' : '(自动救援 关)');
+    // 2.5.0：手动关闭自动救援开关状态（网页按钮互斥显示）
+    const offBtn = $('btn-auto-recover-off');
+    const onBtn = $('btn-auto-recover-on');
+    if (r.state.autoRecoverOff) {
+      offBtn.style.display = 'none';
+      onBtn.style.display = '';
+    } else {
+      offBtn.style.display = '';
+      onBtn.style.display = 'none';
+    }
     const rr = r.restartRequest;
     const rrEl = $('restart-request-flag');
     if (rr && rr.status === 'pending') {
@@ -426,6 +436,30 @@
     });
     $('btn-clear-log').addEventListener('click', () => {
       $('log').innerHTML = '<div class="empty">已清空（服务端日志仍在）</div>';
+    });
+    // 2.5.0：手动恢复中断会话（guardian 触发 session-manager scan）
+    $('btn-recover-session').addEventListener('click', async () => {
+      if (!confirm('恢复中断会话？将调用 session-manager scan 扫描并续跑可恢复的会话（需已装 session-manager）。')) return;
+      setMsg('恢复会话中…');
+      const r = await api('/api/session-recover', 'POST', { reason: 'guardian-manual' });
+      if (r.ok) {
+        setMsg(r.skipped ? '⚠️ ' + (r.detail || 'session-manager 未安装，跳过恢复') : '✅ ' + (r.detail || '已触发会话恢复'), r.skipped ? 'warn' : 'ok');
+      } else {
+        setMsg('❌ ' + (r.detail || r.error || '恢复失败'), 'err');
+      }
+      loadStatus();
+    });
+    // 2.5.0：手动关闭自动救援（不杀 guardian，DSH 崩溃只保留现场不 git 回退/拉起）
+    $('btn-auto-recover-off').addEventListener('click', async () => {
+      if (!confirm('关闭自动救援？DSH 崩溃时将只保留现场+事件，不自动 git 回退/拉起（guardian 进程保持运行）。测试完记得点「开启自动救援」恢复！')) return;
+      const r = await api('/api/auto-recover', 'POST', { enabled: false });
+      setMsg(r.ok ? '⏸ 自动救援已关闭（DSH 崩溃不再自动回退/拉起）' : '❌ ' + (r.error || '关闭失败'), r.ok ? 'warn' : 'err');
+      loadStatus();
+    });
+    $('btn-auto-recover-on').addEventListener('click', async () => {
+      const r = await api('/api/auto-recover', 'POST', { enabled: true });
+      setMsg(r.ok ? '▶ 自动救援已开启（DSH 崩溃将自动 git 回退/拉起）' : '❌ ' + (r.error || '开启失败'), r.ok ? 'ok' : 'err');
+      loadStatus();
     });
   }
 
