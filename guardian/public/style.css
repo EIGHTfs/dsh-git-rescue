@@ -162,3 +162,96 @@ button.ghost { background: var(--card2); border: 1px solid var(--border); }
   button { padding: 10px 14px; }
   .row > button { flex: 1; }
 }
+
+/* ===== LLM 对话样式（2026-08-21）===== */
+.modal {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.modal-content {
+  background: var(--bg);
+  border-radius: 8px;
+  width: 90%;
+  max-width: 700px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.modal-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-header h3 { margin: 0; }
+.modal-header .close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--text);
+}
+.modal-body {
+  padding: 16px;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.chat-history {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--bg-alt);
+  border-radius: 4px;
+}
+.chat-user {
+  text-align: right;
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: var(--accent);
+  color: white;
+  border-radius: 12px;
+  display: inline-block;
+  float: right;
+  clear: both;
+  max-width: 80%;
+}
+.chat-assistant {
+  text-align: left;
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: inline-block;
+  float: left;
+  clear: both;
+  max-width: 80%;
+}
+.chat-error {
+  text-align: center;
+  color: var(--error);
+  padding: 8px;
+  margin: 4px 0;
+}
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+}
+.chat-input-row input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}

@@ -78,9 +78,11 @@
       stopFlag.className = 'msg warn';
       stopFlag.style.display = '';
       $('btn-start').disabled = false;
+      $('btn-stop').disabled = true;
     } else {
       stopFlag.style.display = 'none';
       $('btn-start').disabled = r.state.dsh === 'running';
+      $('btn-stop').disabled = r.state.dsh !== 'running';
     }
   }
 
@@ -509,6 +511,9 @@
     loadLog();
     loadBackupStatus();
     setInterval(() => { loadStatus(); loadLog(); loadBackupStatus(); }, 5000);
+    // LLM 对话按钮事件绑定
+    const chatBtn = document.getElementById('llm-chat-btn');
+    if (chatBtn) chatBtn.addEventListener('click', openChatModal);
   }
 
   document.addEventListener('DOMContentLoaded', start);

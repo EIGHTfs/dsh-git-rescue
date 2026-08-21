@@ -62,13 +62,7 @@
         <button class="ghost" id="btn-stop">⏹ 停止 DSH</button>
         <button class="danger" id="btn-recover">↩ 手动救援（git 回退）</button>
       </div>
-      <div class="row mt">
-        <button class="success" id="btn-recover-session">♻ 恢复中断会话</button>
-        <button class="danger" id="btn-auto-recover-off">⏸ 关闭自动救援</button>
-        <button class="success" id="btn-auto-recover-on" style="display:none">▶ 开启自动救援</button>
-      </div>
       <div class="status" id="action-msg"></div>
-      <div class="hint mt">测试插件时点「关闭自动救援」：DSH 崩溃只保留现场不自动回退（guardian 进程保持运行），测完点「开启自动救援」恢复。</div>
     </div>
   </div>
 
@@ -148,6 +142,35 @@
       <div id="log" class="log"><div class="empty">暂无日志</div></div>
       <div class="row mt">
         <button class="ghost" id="btn-clear-log">清空日志显示</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============ 与日志 LLM 对话 ============ -->
+  <div class="group" id="group-llm-chat">
+    <div class="group-head">🤖 与日志 LLM 对话</div>
+    <div class="group-body">
+      <div class="hint">基于守护进程日志，让 LLM 帮你分析故障原因或提供建议。</div>
+      <div class="row mt">
+        <button class="primary" id="llm-chat-btn">💬 开始对话</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 对话模态框 -->
+  <div id="llm-chat-modal" class="modal" style="display:none">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>🤖 LLM 对话</h3>
+        <button class="close" onclick="closeChatModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="llm-chat-history" class="chat-history"></div>
+        <div class="chat-input-row">
+          <input type="text" id="llm-chat-input" placeholder="输入问题，按 Enter 发送..." onkeydown="if(event.key==='Enter') sendChatMessage()">
+          <button class="primary" onclick="sendChatMessage()">发送</button>
+        </div>
       </div>
     </div>
   </div>
