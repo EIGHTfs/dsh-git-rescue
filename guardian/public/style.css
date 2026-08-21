@@ -284,3 +284,10 @@ button.ghost { background: var(--card2); border: 1px solid var(--border); }
   display: block;
   clear: both;
 }
+
+/* ===== 安装器/长任务进度条（2026-08-22）===== */
+.progress-wrap { margin-top: 8px; height: 6px; background: var(--border, rgba(128,128,128,.25)); border-radius: 3px; overflow: hidden; display: none; }
+.progress-wrap.active { display: block; }
+.progress-bar { height: 100%; width: 30%; background: var(--accent, #4a90d9); border-radius: 3px; animation: progress-slide 1.2s ease-in-out infinite; }
+@keyframes progress-slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+button[disabled] { opacity: .6; cursor: not-allowed; }

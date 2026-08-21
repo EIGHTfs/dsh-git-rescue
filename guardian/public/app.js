@@ -401,22 +401,35 @@
     });
     // 救援环境安装器：拉取最新并安装
     $('installer-run').addEventListener('click', async () => {
+      const btn = $('installer-run');
+      const progress = $('installer-progress');
       const targets = [];
       if ($('installer-target-test').checked) targets.push('test');
       if ($('installer-target-clean').checked) targets.push('clean');
       const msg = $('installer-msg');
+      // 禁用按钮 + 显示进度条（防重复点击；长任务给进行中反馈）
+      btn.disabled = true;
+      progress.classList.add('active');
       msg.textContent = '拉取最新源码并安装中…（可能 1-2 分钟）';
       msg.className = 'status dim';
-      const r = await api('/api/installer/install', 'POST', { targets });
-      if (r.ok) {
-        const detail = (r.results || []).map((x) => `${x.target}: ${x.ok ? '✅' : '❌ ' + (x.error || '')}`).join(' | ');
-        msg.textContent = `✅ 安装完成 v${r.version || '?'} — ${detail}`;
-        msg.className = 'status ok';
-      } else {
-        msg.textContent = '❌ ' + (r.error || '安装失败');
+      try {
+        const r = await api('/api/installer/install', 'POST', { targets });
+        if (r.ok) {
+          const detail = (r.results || []).map((x) => `${x.target}: ${x.ok ? '✅' : '❌ ' + (x.error || '')}`).join(' | ');
+          msg.textContent = `✅ 安装完成 v${r.version || '?'} — ${detail}`;
+          msg.className = 'status ok';
+        } else {
+          msg.textContent = '❌ ' + (r.error || '安装失败');
+          msg.className = 'status err';
+        }
+      } catch (e) {
+        msg.textContent = '❌ ' + (e?.message || e || '请求异常');
         msg.className = 'status err';
+      } finally {
+        btn.disabled = false;
+        progress.classList.remove('active');
+        loadInstaller();
       }
-      loadInstaller();
     });
     $('btn-start').addEventListener('click', async () => {
       setMsg('正在启动 DSH …');
