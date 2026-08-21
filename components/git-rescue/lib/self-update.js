@@ -35,7 +35,7 @@ export const UPDATE_SOURCE = {
   subdir: 'components/git-rescue',
 }
 
-export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000 // 每 6 小时检查一次
+export const UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000 // 每 24 小时（每天一次）定时检查；另在每次 DSH 启动成功后 30s 检查一次
 
 const API = 'https://api.github.com'
 const RAW = 'https://raw.githubusercontent.com'

@@ -21,7 +21,7 @@
   - 网页控制台（默认 3082）+ `/api/status`、`/api/recover`、`/api/start`
 
 - **v1.3.0 功能三：自动更新（强制跟随 GitHub 最新稳定版）**
-  - 启动 30s 后检查 + 每 6 小时定时检查远端 `EIGHTfs/dsh-git-rescue` main 分支
+  - **每次启动成功 30s 后检查 + 每天一次定时检查**远端 `EIGHTfs/dsh-git-rescue` main 分支
   - 远端版本 > 本地 → 自动下载 `components/git-rescue/` 子树 → 语法校验 → 原子替换 → 重启生效
   - **隐藏开关强制开启**：不写入 config、不暴露设置 API；仅环境变量 `DSH_GIT_RESCUE_AUTO_UPDATE=0` 可关闭（调试/隔离用）
   - 安全：路径白名单（只同步插件子树）、替换前备份、失败自动回滚、语法校验不过不替换
@@ -32,6 +32,13 @@
   - 规避核心困境：DSH 重启会中断所有会话，同步"kill→验证"会在 kill 瞬间断掉；setsid 脱离进程组后脚本自持完整流程
   - Agent 工具 `git_rescue_restart` + `POST /api/git-rescue/restart` + `GET /api/git-rescue/restart-log`
   - 配套 skill 档案：`docs/skill-dsh-restart-takeover.md`（模板/机制/已知坑/验证清单）
+
+- **v1.5.0 功能五：会话恢复联动（与 dsh-session-manager 协同，不内置）**
+  - 原则：**装了 session-manager 才调用，没装就不调用，不内置会话恢复**
+  - 崩溃检出（crash-detected）后自动扫描全部会话并续跑可续的（调 session-manager 的 `scan`）
+  - 探测：GET `/api/session-manager/list` 可用才联动；联动失败静默，不影响 git-rescue 主流程
+  - Agent 工具 `git_rescue_link_recovery` + `POST /api/git-rescue/link-session-recovery`（手动触发）
+  - status 输出 `sessionLink` 字段（available/lastResult）
 
 ## 已验证（2026-08-18，测试实例 3083）
 
@@ -68,6 +75,8 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.5.0 | 功能5：会话恢复联动（session-manager 装了才调用 scan 续跑，没装跳过，不内置） |
+| 1.4.1 | 修复（严重）：接管式重启脚本不再 kill -9 runner（SIGKILL 触发 s6 退避，重拉延迟 15s→4min），只发 TERM；轮询窗口 150s→240s |
 | 1.4.0 | 功能4：接管式重启（独立脚本重启+验证，规避会话中断；配套 skill 档案） |
 | 1.3.0 | 功能3：自动更新（强制跟随 GitHub 最新稳定版，隐藏开关 env 可关） |
 | 1.2.2 | 修复：工具注册补 parameters（Agent 调用 git_rescue_* 整轮失败） |

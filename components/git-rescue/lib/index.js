@@ -22,6 +22,7 @@ import {
 import { verifyToken, pushSnapshot } from './github.js'
 import { getDeviceId, defaultBackupRepo } from './device.js'
 import { AUTO_UPDATE_ENABLED, UPDATE_INTERVAL_MS, checkForUpdate, applyUpdate } from './self-update.js'
+import { sessionManagerAvailable, linkSessionRecovery } from './session-link.js'
 
 export const name = 'dsh-git-rescue'
 export const inject = ['webServer']
@@ -65,6 +66,7 @@ let autoCommitTimer = null
 let autoUpdateTimer = null
 let lastCrashDetectedAt = null
 let autoUpdateState = { enabled: AUTO_UPDATE_ENABLED, lastCheckAt: null, lastResult: null, pendingRestart: false }
+let sessionLinkState = { available: null, lastAction: null, lastResult: null, lastAt: null }
 
 // ---------- 基础工具 ----------
 async function pathExists(p) { try { await fs.access(p); return true } catch { return false } }
@@ -170,6 +172,7 @@ async function collectStatus() {
     config: { ...cfg },
     lastCrashDetectedAt,
     autoUpdate: { ...autoUpdateState },
+    sessionLink: { ...sessionLinkState },
   }
 }
 
@@ -198,6 +201,25 @@ async function detectCrashOnStartup() {
     lastCrashDetectedAt = hb.ts
     await appendEvent('crash-detected', { lastHeartbeatAgeMs: age, lastPid: hb.pid })
     await commitAll('crash-detected | pre-rollback snapshot of broken state')
+    // 会话恢复联动（用户约定：装了 session-manager 才调用，没装不调用，不内置）
+    // 崩溃后扫描全部会话并自动续跑可续的；失败静默不影响主流程
+    try {
+      sessionLinkState.available = await sessionManagerAvailable()
+      if (sessionLinkState.available) {
+        const r = await linkSessionRecovery({ reason: 'crash-detected' })
+        sessionLinkState.lastAction = 'scan'
+        sessionLinkState.lastResult = r
+        sessionLinkState.lastAt = ts()
+        await appendEvent('session-recovery-link', { available: true, result: r })
+      } else {
+        sessionLinkState.lastAction = null
+        sessionLinkState.lastResult = { ok: true, skipped: true, detail: 'session-manager 未安装，跳过会话恢复联动' }
+        await appendEvent('session-recovery-link', { available: false, skipped: true })
+      }
+    } catch (e) {
+      sessionLinkState.lastResult = { ok: false, skipped: false, detail: String(e?.message ?? e) }
+      await appendEvent('session-recovery-link', { available: sessionLinkState.available, error: String(e?.message ?? e) })
+    }
     return true
   }
   return false
@@ -298,21 +320,24 @@ if [ -z "$RPID" ]; then
 fi
 echo "[$(date +%T)] 目标 PID=$RPID" >> "$LOG"
 if [ -n "$RPID" ]; then
+  # 只发 TERM，绝不 kill -9：s6-supervise 对 SIGKILL 会进入退避等待，
+  # 实测重拉延迟从 15~26s 暴涨到 ~4 分钟（TERM 是受控停止，s6 立即重拉）
   kill "$RPID" 2>/dev/null
-  sleep 2
-  kill -0 "$RPID" 2>/dev/null && kill -9 "$RPID" 2>/dev/null
 else
   echo "[$(date +%T)] ❌ 未找到任何 DSH 进程（可能已停机？）" >> "$LOG"
 fi
 
-# 3) 轮询端口恢复（最多 150s）
+# 2.5 轮询前先给 s6 一点响应时间（TERM 后 runner 优雅退出 dsh → s6 立即重拉）
+sleep 3
+
+# 3) 轮询端口恢复（最多 240s；s6 正常 TERM 重拉 15~26s，SIGKILL 退避最坏 ~4min，留足余量）
 UP=0
-for i in $(seq 1 30); do
+for i in $(seq 1 48); do
   sleep 5
   if curl -s -o /dev/null -w "%{http_code}" "http://${host}:${port}/" -m 3 2>/dev/null | grep -q 200; then
     UP=1; echo "[$(date +%T)] 服务恢复 (第 $i 轮)" >> "$LOG"; break
   fi
-  echo "[$(date +%T)] 等待恢复... ($i/30)" >> "$LOG"
+  echo "[$(date +%T)] 等待恢复... ($i/48)" >> "$LOG"
 done
 
 # 4) 恢复后等插件加载，验证 git-rescue API
@@ -463,6 +488,17 @@ async function handleApi(req, res, url, method) {
     }
   }
 
+  // 手动触发会话恢复联动（探测 session-manager → 有则 scan 续跑，无则跳过）
+  if (method === 'POST' && path === '/api/git-rescue/link-session-recovery') {
+    sessionLinkState.available = await sessionManagerAvailable()
+    const r = await linkSessionRecovery({ reason: 'manual' })
+    sessionLinkState.lastAction = 'scan'
+    sessionLinkState.lastResult = r
+    sessionLinkState.lastAt = ts()
+    await appendEvent('session-recovery-link', { available: sessionLinkState.available, manual: true, result: r })
+    return send(res, r.ok ? 200 : 500, { ok: r.ok, linked: r.linked, skipped: r.skipped, detail: r.detail, available: sessionLinkState.available })
+  }
+
   // 手动触发自动更新检查（不应用，只检查）；带 ?apply=1 则直接应用
   if (method === 'POST' && path === '/api/git-rescue/auto-update') {
     const token = await readToken()
@@ -531,11 +567,16 @@ export async function apply(ctx) {
       const auLine = au.enabled
         ? (au.pendingRestart ? `自动更新: ON, 已更新待重启（${au.lastResult?.detail || ''}）` : `自动更新: ON${au.lastCheckAt ? `, 最近检查 ${au.lastResult?.detail || au.lastResult?.error || ''}` : ''}`)
         : '自动更新: OFF (env DSH_GIT_RESCUE_AUTO_UPDATE=0)'
+      const sl = s.sessionLink
+      const slLine = sl.available === null
+        ? '会话恢复联动: 未探测'
+        : (sl.available ? `会话恢复联动: session-manager 已安装${sl.lastResult ? `, 最近 ${sl.lastResult.detail || ''}` : ''}` : '会话恢复联动: session-manager 未安装（跳过）')
       return `git: ${g.version || '不可用'}${g.httpsHelperMissing ? ' (https 助手缺失→推送走 REST API)' : ''}\n` +
         `.dsh 仓库: ${s.repos.dsh.repo ? '已初始化' : '未初始化'}${s.repos.dsh.head ? ` @ ${s.repos.dsh.head}` : ''}${s.repos.dsh.changed ? `, ${s.repos.dsh.changed} 项未提交` : ''}\n` +
         (s.repos.workspace ? `workspace 仓库: ${s.repos.workspace.repo ? '已初始化' : '未初始化'}${s.repos.workspace.head ? ` @ ${s.repos.workspace.head}` : ''}\n` : '') +
         `心跳: ${s.heartbeat ? (s.heartbeat.ok ? '正常' : '过期') : '无'}\n` +
-        auLine
+        auLine + '\n' +
+        slLine
     }))
     tools.register(defineToolSimple('git_rescue_init', '初始化 git-rescue 仓库（git init + .gitignore + 基线 commit）', async () => {
       const r = await initRepos()
@@ -564,6 +605,15 @@ export async function apply(ctx) {
     tools.register(defineToolSimple('git_rescue_restart', '接管式重启 DSH（独立脚本 TERM→轮询恢复→验证；当前会话会中断，结果写入 restart-latest.log 供后续查看）', async () => {
       const r = await takeoverRestart()
       return r.message
+    }))
+    tools.register(defineToolSimple('git_rescue_link_recovery', '触发会话恢复联动：探测 dsh-session-manager 是否安装，已安装则调用其 scan 自动续跑被中断的会话（未安装则跳过，不内置会话恢复）', async () => {
+      sessionLinkState.available = await sessionManagerAvailable()
+      const r = await linkSessionRecovery({ reason: 'tool' })
+      sessionLinkState.lastAction = 'scan'
+      sessionLinkState.lastResult = r
+      sessionLinkState.lastAt = ts()
+      await appendEvent('session-recovery-link', { available: sessionLinkState.available, tool: true, result: r })
+      return r.detail || (r.skipped ? 'session-manager 未安装，跳过会话恢复联动' : '会话恢复联动已触发')
     }))
   }
 

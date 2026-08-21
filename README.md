@@ -7,6 +7,16 @@
 把 `.dsh` 用户目录（sessions 会话、settings、profiles 配置）与 `workspace` 纳入 git 版本管理，
 用 commit 历史做精细回退；harness 崩溃时自动回退到上一个好版本。远端备份**仅支持 GitHub token 方案**。
 
+**功能总览**（组件 C 当前 v1.5.0）：
+
+| 功能 | 版本 | 一句话 |
+|------|------|--------|
+| git 版本管理 | v1.1.0 | .dsh/workspace 双仓库、自动 commit、心跳、崩溃检测、token 推送 |
+| guardian 自动救援 | v1.2.0 | 独立进程探活 + git 回退 + 拉起 + 自检（坏点标记防死循环） |
+| **自动更新** | v1.3.0 | **强制跟随 GitHub 最新稳定版**：每次启动 30s 首查 + 每天定时，原子替换 + 失败回滚（隐藏开关 env 可关） |
+| **接管式重启** | v1.4.0 | **独立脚本接管 DSH 重启**：TERM→轮询恢复→验证→留痕，会话中断也能安全完成（配套 skill `docs/skill-dsh-restart-takeover.md`） |
+| **会话恢复联动** | v1.5.0 | **与 dsh-session-manager 协同**：崩溃后调用其 scan 自动续跑中断会话；装了才调用、没装跳过、不内置 |
+
 ![体系架构](docs/screenshots/architecture.svg)
 
 </div>
@@ -125,7 +135,9 @@ DeepSeek Harness 改配置、装插件、跑长任务都是家常便饭，风险
 
 - 设置页卡片：token 配置、触发策略、仓库状态、手动备份/回退按钮
 - 自动 commit 与心跳写入
-- Agent 工具：`git_rescue_backup` / `git_rescue_status` / `git_rescue_rollback`
+- Agent 工具：`git_rescue_backup` / `git_rescue_status` / `git_rescue_rollback` / `git_rescue_restart` / `git_rescue_push`
+- **自动更新（v1.3.0）**：强制跟随 GitHub 最新稳定版，规避"救援插件自身带 bug 没人更新"的隐患——启动 30s 首查 + 每天定时，远端版本更高则自动原子替换（语法校验 + 失败回滚），隐藏开关 `DSH_GIT_RESCUE_AUTO_UPDATE=0` 可关
+- **接管式重启（v1.4.0）**：DSH 重启会中断所有会话，同步"kill→验证"会在 kill 瞬间断掉——插件生成独立脚本（setsid 脱离进程组）接管完整流程：TERM runner → 轮询端口恢复 → 验证插件 API → 结果写 `git-rescue/restart-latest.log`，会话恢复后读日志确认
 
 ### 组件二：guardian 独立进程
 
