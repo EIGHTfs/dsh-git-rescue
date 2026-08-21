@@ -126,6 +126,8 @@
   }
 
   async function loadLog() {
+    // 用户点过「清空日志显示」后跳过自动重绘（直到页面刷新），不再 5s 后又刷回来
+    if (logCleared) return;
     const r = await api('/api/status');
     const el = $('log');
     if (!r.ok || !r.log || r.log.length === 0) {
@@ -171,6 +173,7 @@
   // ===== web 多选备份（会话/skill 定向备份，2026-08-20）=====
   // ===== 备份内容选择（类别式：profile 必选 + session/skill/api 多选，2026-08-21 重写）=====
   let bsCfg = { profile: true, session: true, skill: true, api: true };
+  let logCleared = false; // 用户清空日志显示后跳过自动重绘（刷新页面恢复）
 
   // 渲染类别勾选框（profile 锁定必选）
   function renderBackupSelectCats(cfg, categories) {
@@ -437,7 +440,8 @@
       loadGitLog();
     });
     $('btn-clear-log').addEventListener('click', () => {
-      $('log').innerHTML = '<div class="empty">已清空（服务端日志仍在）</div>';
+      logCleared = true; // 阻止后续自动重绘
+      $('log').innerHTML = '<div class="empty">已清空（服务端日志仍在，刷新页面恢复显示）</div>';
     });
     // 2.5.0：手动恢复中断会话（guardian 触发 session-manager scan）
     $('btn-recover-session').addEventListener('click', async () => {
