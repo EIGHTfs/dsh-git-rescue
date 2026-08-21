@@ -188,3 +188,4 @@ dsh-git-rescue/
 2026-08-21: LLM 自治修复成功（未 git 覆盖）: 根因是端口3080被占用（EADDRINUSE），导致Node.js进程启动失败。可能由于前一个实例未完全退出或另一进程占用端口。此外，boot_symlink（fault=unknown（LLM 自动执行，跳过 git 覆盖））
 2026-08-21: LLM 自治修复成功（未 git 覆盖）: 启动时 dsh-session-persistence-jsonl 读取 Zstandard 会话日志失败，报错“first frame is not exac（fault=unknown（LLM 自动执行，跳过 git 覆盖））
 2026-08-21: LLM 自治修复成功（未 git 覆盖）: 插件配置变更后，dsh-workspace 初始化时尝试读取 Zstandard 会话日志，但日志文件头损坏（第一帧非一行头），导致插件加载失败。同时 prof（fault=plugin（LLM 自动执行，跳过 git 覆盖））
+2026-08-21: 救援成功: 回退到 1092149（fault=unknown, reason=无法判定故障类型，保守走 git 回退）
