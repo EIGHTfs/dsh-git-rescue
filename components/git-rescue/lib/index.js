@@ -22,7 +22,7 @@ import {
 import { verifyToken, pushSnapshot } from './github.js'
 import { getDeviceId, defaultBackupRepo } from './device.js'
 import { AUTO_UPDATE_ENABLED, UPDATE_INTERVAL_MS, checkForUpdate, applyUpdate } from './self-update.js'
-import { sessionManagerAvailable, linkSessionRecovery } from './session-link.js'
+import { linkSessionRecovery } from './session-link.js'
 
 export const name = 'dsh-git-rescue'
 export const inject = ['webServer']
@@ -36,12 +36,15 @@ const TOKEN_PATH = join(STATE_ROOT, 'token')
 const HEARTBEAT_PATH = join(STATE_ROOT, 'heartbeat')
 const EVENTS_PATH = join(STATE_ROOT, 'events.jsonl')
 
-/** .dsh 仓库的 .gitignore（配置+会话+skills 入库，敏感/大文件/缓存排除）。 */
+/** .dsh 仓库的 .gitignore（配置+skills 入库；sessions/storages 走基线+增量策略，敏感/大文件/缓存排除）。 */
 const DSH_GITIGNORE = [
   'node_modules/',
   'profiles/*/node_modules/',
   '.credentials.yaml',
   '.env',
+  // v1.6.0 ⑥：sessions/storages 排除出常规增量 commit（zstd 二进制变化大），
+  // 由定期基线策略（sessionsBaselineMs，默认 24h）强制全量入库
+  'sessions/',
   'storages/',
   'snapshot-archive/',
   'git-rescue/',
@@ -54,6 +57,7 @@ const DEFAULT_CONFIG = {
   githubRepo: '',
   autoCommitMs: 30 * 60 * 1000,
   heartbeatMs: 30 * 1000,
+  sessionsBaselineMs: 24 * 60 * 60 * 1000, // v1.6.0 ⑥：sessions 全量基线周期（默认每天一次）
   workspaceEnabled: false,
   workspaceDir: '',
   workspaceWhitelist: [],
@@ -64,6 +68,7 @@ let cfg = { ...DEFAULT_CONFIG }
 let heartbeatTimer = null
 let autoCommitTimer = null
 let autoUpdateTimer = null
+let sessionsBaselineTimer = null
 let lastCrashDetectedAt = null
 let autoUpdateState = { enabled: AUTO_UPDATE_ENABLED, lastCheckAt: null, lastResult: null, pendingRestart: false }
 let sessionLinkState = { available: null, lastAction: null, lastResult: null, lastAt: null }
@@ -152,6 +157,44 @@ async function commitAll(reason) {
   return out
 }
 
+/**
+ * v1.6.0 ⑥：sessions 全量基线入库。
+ * sessions/storages 平时被 .gitignore 排除（zstd 二进制变化大，避免增量膨胀），
+ * 此函数用 git add -f 强制入库 → 基线 commit → git rm -r --cached 恢复忽略
+ * （文件保留在磁盘，只是回到"未跟踪"状态，后续增量 commit 不再包含）。
+ */
+async function commitSessionsBaseline() {
+  try {
+    const sessionsDir = join(DSH_ROOT, 'sessions')
+    const storagesDir = join(DSH_ROOT, 'storages')
+    const { runGit } = await import('./git.js')
+    const dirs = []
+    if (await pathExists(sessionsDir)) dirs.push(sessionsDir)
+    if (await pathExists(storagesDir)) dirs.push(storagesDir)
+    if (dirs.length === 0) return { ok: true, empty: true }
+
+    for (const d of dirs) {
+      const r = await runGit(['add', '-f', d], { cwd: DSH_ROOT })
+      if (!r.ok) return { ok: false, error: `add -f ${d} 失败: ${r.stderr}` }
+    }
+    const cm = await runGit(['commit', '-m', 'chore(guard): sessions baseline | 定期全量基线（sessions/storages）'], { cwd: DSH_ROOT })
+    if (!cm.ok) {
+      // 可能无变更（与上次基线相同）
+      await runGit(['reset'], { cwd: DSH_ROOT }).catch(() => {})
+      return { ok: true, empty: true }
+    }
+    // 恢复忽略：从索引移除（文件保留），后续增量 commit 不再含 sessions/storages
+    for (const d of dirs) {
+      await runGit(['rm', '-r', '--cached', d.replace(DSH_ROOT, '.').replace(/^\//, '')], { cwd: DSH_ROOT }).catch(() => {})
+    }
+    await appendEvent('sessions-baseline', { ok: true, hash: await headRef(DSH_ROOT) })
+    return { ok: true, hash: await headRef(DSH_ROOT) }
+  } catch (e) {
+    await appendEvent('sessions-baseline', { error: String(e?.message ?? e) })
+    return { ok: false, error: String(e?.message ?? e) }
+  }
+}
+
 async function collectStatus() {
   const heartbeat = await readHeartbeat()
   const dshHead = await headRef(DSH_ROOT)
@@ -204,21 +247,15 @@ async function detectCrashOnStartup() {
     // 会话恢复联动（用户约定：装了 session-manager 才调用，没装不调用，不内置）
     // 崩溃后扫描全部会话并自动续跑可续的；失败静默不影响主流程
     try {
-      sessionLinkState.available = await sessionManagerAvailable()
-      if (sessionLinkState.available) {
-        const r = await linkSessionRecovery({ reason: 'crash-detected' })
-        sessionLinkState.lastAction = 'scan'
-        sessionLinkState.lastResult = r
-        sessionLinkState.lastAt = ts()
-        await appendEvent('session-recovery-link', { available: true, result: r })
-      } else {
-        sessionLinkState.lastAction = null
-        sessionLinkState.lastResult = { ok: true, skipped: true, detail: 'session-manager 未安装，跳过会话恢复联动' }
-        await appendEvent('session-recovery-link', { available: false, skipped: true })
-      }
+      const r = await linkSessionRecovery({ reason: 'crash-detected' })
+      sessionLinkState.available = !r.skipped
+      sessionLinkState.lastAction = 'scan'
+      sessionLinkState.lastResult = r
+      sessionLinkState.lastAt = ts()
+      await appendEvent('session-recovery-link', { available: !r.skipped, result: r })
     } catch (e) {
       sessionLinkState.lastResult = { ok: false, skipped: false, detail: String(e?.message ?? e) }
-      await appendEvent('session-recovery-link', { available: sessionLinkState.available, error: String(e?.message ?? e) })
+      await appendEvent('session-recovery-link', { error: String(e?.message ?? e) })
     }
     return true
   }
@@ -286,6 +323,26 @@ async function runAutoUpdateCheck() {
 // ---------- 接管式重启（dsh-restart-takeover 方案） ----------
 
 /**
+ * 解析 DSH 拉起命令（接管脚本 60s 未恢复时主动拉起用）。
+ * 优先级：
+ *  1. 环境变量 DSH_START_CMD（显式指定，最高优先，外部覆盖）
+ *  2. 测试实例启动脚本 dsh-test-instance.sh（存在时——手动启动实例 kill 后必须靠它拉起）
+ *  3. 兜底：runner.js 拉起（主实例场景；一般轮不到，s6 会先自动重拉）
+ * @param {number} port DSH 端口
+ */
+function resolveStartCmd(port) {
+  const wsDir = '/vol1/@appshare/DeepSeekHarness/workspace'
+  const testScript = join(wsDir, 'dsh-test-instance.sh')
+  try {
+    if (existsSync(testScript)) {
+      return `bash ${testScript}`
+    }
+  } catch { /* 探测失败走兜底 */ }
+  // 兜底：主实例 runner（s6 通常已自动拉起，这里只是最后手段）
+  return `${process.execPath} /vol1/@appcenter/deepseek-harness/bin/runner.js`
+}
+
+/**
  * 接管式重启 DSH：生成独立脚本 → setsid 脱离进程组 → 脚本负责
  *  TERM runner → 轮询端口恢复 → 验证插件 API → 结果写日志文件。
  *
@@ -300,7 +357,13 @@ async function takeoverRestart() {
   const scriptFile = join(STATE_ROOT, 'restart-takeover.sh')
   const port = process.env.DSH_PORT || 3081
   const host = process.env.DSH_HOST || '127.0.0.1'
-  const ws = process.env.TEST_DSH_PORT ? '' : '0' // 测试实例脚本管理，主实例走 runner/s6
+
+  // 拉起命令来源（优先级）：环境变量 DSH_START_CMD > 自动推导（测试实例脚本 / 兜底命令）
+  // 为什么需要主动拉起：主实例由 fnOS s6 管理（TERM 后自动重拉 15~26s）；
+  // 但手动启动的实例（如 dsh-test-instance.sh 起的测试实例）kill 后没人拉起——
+  // 轮询 60s 未恢复就必须自己执行启动命令，否则永远等不到。
+  const autoCmd = resolveStartCmd(port)
+  const startCmd = process.env.DSH_START_CMD || autoCmd || ''
 
   // 独立脚本内容（含完整重启+验证流程，脱离 DSH 后自持）
   const script = `#!/bin/bash
@@ -330,17 +393,39 @@ fi
 # 2.5 轮询前先给 s6 一点响应时间（TERM 后 runner 优雅退出 dsh → s6 立即重拉）
 sleep 3
 
-# 3) 轮询端口恢复（最多 240s；s6 正常 TERM 重拉 15~26s，SIGKILL 退避最坏 ~4min，留足余量）
+# 3) 第一段轮询：等 s6/守护自动重拉（最多 60s = 12 轮）
 UP=0
-for i in $(seq 1 48); do
+for i in $(seq 1 12); do
   sleep 5
   if curl -s -o /dev/null -w "%{http_code}" "http://${host}:${port}/" -m 3 2>/dev/null | grep -q 200; then
-    UP=1; echo "[$(date +%T)] 服务恢复 (第 $i 轮)" >> "$LOG"; break
+    UP=1; echo "[$(date +%T)] 服务自动恢复 (第 $i 轮)" >> "$LOG"; break
   fi
-  echo "[$(date +%T)] 等待恢复... ($i/48)" >> "$LOG"
+  echo "[$(date +%T)] 等待自动恢复... ($i/12)" >> "$LOG"
 done
 
-# 4) 恢复后等插件加载，验证 git-rescue API
+# 3.5 60s 未恢复 → 主动拉起（手动启动的实例 kill 后没人自动拉，必须自己拉）
+if [ "$UP" != "1" ]; then
+  if [ -n "${startCmd}" ]; then
+    echo "[$(date +%T)] ⏳ 60s 未自动恢复，执行拉起命令: ${startCmd}" >> "$LOG"
+    (cd /vol1/@appshare/DeepSeekHarness/workspace 2>/dev/null || cd /; setsid nohup bash -c "${startCmd}" >> "$LOG" 2>&1 < /dev/null &)
+    echo "[$(date +%T)] 拉起命令已执行，继续轮询..." >> "$LOG"
+  else
+    echo "[$(date +%T)] ⚠️ 60s 未自动恢复，且无可用拉起命令（DSH_START_CMD 未设置）" >> "$LOG"
+  fi
+fi
+
+# 4) 第二段轮询：拉起后继续等（最多 240s = 48 轮）
+if [ "$UP" != "1" ]; then
+  for i in $(seq 1 48); do
+    sleep 5
+    if curl -s -o /dev/null -w "%{http_code}" "http://${host}:${port}/" -m 3 2>/dev/null | grep -q 200; then
+      UP=1; echo "[$(date +%T)] 服务恢复 (第 $i 轮/第二段)" >> "$LOG"; break
+    fi
+    echo "[$(date +%T)] 等待恢复... ($i/48)" >> "$LOG"
+  done
+fi
+
+# 5) 恢复后等插件加载，验证 git-rescue API
 if [ "$UP" = 1 ]; then
   sleep 10
   echo "[$(date +%T)] --- /api/git-rescue/status ---" >> "$LOG"
@@ -348,7 +433,7 @@ if [ "$UP" = 1 ]; then
   echo "" >> "$LOG"
   echo "[$(date +%T)] ✅ 接管式重启完成" >> "$LOG"
 else
-  echo "[$(date +%T)] ❌ 服务未在 150s 内恢复" >> "$LOG"
+  echo "[$(date +%T)] ❌ 服务未在 300s 内恢复" >> "$LOG"
 fi
 `
   await fs.mkdir(STATE_ROOT, { recursive: true })
@@ -358,12 +443,12 @@ fi
   const { spawn } = await import('node:child_process')
   const child = spawn('setsid', ['nohup', 'bash', scriptFile], {
     detached: true, stdio: 'ignore',
-    env: { ...process.env, DSH_PORT: String(port), DSH_HOST: host },
+    env: { ...process.env, DSH_PORT: String(port), DSH_HOST: host, DSH_START_CMD: startCmd },
   })
   child.unref()
 
-  await appendEvent('restart-takeover', { logFile })
-  return { ok: true, logFile, message: `接管式重启已启动：DSH 即将重启，会话会中断；重启与验证由独立脚本完成，结果写入 ${logFile}（约 30~60s 后可查看）` }
+  await appendEvent('restart-takeover', { logFile, startCmd: startCmd || null })
+  return { ok: true, logFile, message: `接管式重启已启动：DSH 即将重启，会话会中断；重启与验证由独立脚本完成，结果写入 ${logFile}（约 30~90s 后可查看）` }
 }
 
 // ---------- 定时器 ----------
@@ -384,13 +469,18 @@ function startTimers() {
     autoUpdateTimer = setInterval(() => { runAutoUpdateCheck().catch(() => {}) }, UPDATE_INTERVAL_MS)
     autoUpdateTimer.unref?.()
   }
+  // v1.6.0 ⑥：sessions 全量基线（默认每天一次；启动 5 分钟后首跑，方便首次部署立即建基线）
+  sessionsBaselineTimer = setInterval(() => { commitSessionsBaseline().catch(() => {}) }, cfg.sessionsBaselineMs)
+  sessionsBaselineTimer.unref?.()
+  setTimeout(() => { commitSessionsBaseline().catch(() => {}) }, 5 * 60 * 1000).unref?.()
 }
 
 function stopTimers() {
   if (heartbeatTimer) clearInterval(heartbeatTimer)
   if (autoCommitTimer) clearInterval(autoCommitTimer)
   if (autoUpdateTimer) clearInterval(autoUpdateTimer)
-  heartbeatTimer = autoCommitTimer = autoUpdateTimer = null
+  if (sessionsBaselineTimer) clearInterval(sessionsBaselineTimer)
+  heartbeatTimer = autoCommitTimer = autoUpdateTimer = sessionsBaselineTimer = null
 }
 
 // ---------- HTTP 工具 ----------
@@ -490,13 +580,13 @@ async function handleApi(req, res, url, method) {
 
   // 手动触发会话恢复联动（探测 session-manager → 有则 scan 续跑，无则跳过）
   if (method === 'POST' && path === '/api/git-rescue/link-session-recovery') {
-    sessionLinkState.available = await sessionManagerAvailable()
     const r = await linkSessionRecovery({ reason: 'manual' })
+    sessionLinkState.available = !r.skipped
     sessionLinkState.lastAction = 'scan'
     sessionLinkState.lastResult = r
     sessionLinkState.lastAt = ts()
-    await appendEvent('session-recovery-link', { available: sessionLinkState.available, manual: true, result: r })
-    return send(res, r.ok ? 200 : 500, { ok: r.ok, linked: r.linked, skipped: r.skipped, detail: r.detail, available: sessionLinkState.available })
+    await appendEvent('session-recovery-link', { available: !r.skipped, manual: true, result: r })
+    return send(res, r.ok ? 200 : 500, { ok: r.ok, linked: r.linked, skipped: r.skipped, detail: r.detail, available: !r.skipped })
   }
 
   // 手动触发自动更新检查（不应用，只检查）；带 ?apply=1 则直接应用
@@ -607,12 +697,12 @@ export async function apply(ctx) {
       return r.message
     }))
     tools.register(defineToolSimple('git_rescue_link_recovery', '触发会话恢复联动：探测 dsh-session-manager 是否安装，已安装则调用其 scan 自动续跑被中断的会话（未安装则跳过，不内置会话恢复）', async () => {
-      sessionLinkState.available = await sessionManagerAvailable()
       const r = await linkSessionRecovery({ reason: 'tool' })
+      sessionLinkState.available = !r.skipped
       sessionLinkState.lastAction = 'scan'
       sessionLinkState.lastResult = r
       sessionLinkState.lastAt = ts()
-      await appendEvent('session-recovery-link', { available: sessionLinkState.available, tool: true, result: r })
+      await appendEvent('session-recovery-link', { available: !r.skipped, tool: true, result: r })
       return r.detail || (r.skipped ? 'session-manager 未安装，跳过会话恢复联动' : '会话恢复联动已触发')
     }))
   }
@@ -621,6 +711,14 @@ export async function apply(ctx) {
   await fs.mkdir(STATE_ROOT, { recursive: true }).catch(() => {})
   await detectCrashOnStartup()
   await writeHeartbeat()
+  // v1.6.0 ⑥：刷新 .gitignore 规则（已存在的仓库也获得新规则——sessions/storages 移出常规增量）
+  try {
+    if (await isRepo(DSH_ROOT)) {
+      const existing = await fs.readFile(join(DSH_ROOT, '.gitignore'), 'utf8').catch(() => '')
+      const merged = existing ? [...new Set([...existing.split('\n').filter(Boolean), ...DSH_GITIGNORE])].join('\n') + '\n' : DSH_GITIGNORE.join('\n') + '\n'
+      await fs.writeFile(join(DSH_ROOT, '.gitignore'), merged)
+    }
+  } catch { /* 非仓库/不可写则跳过 */ }
   startTimers()
   await appendEvent('startup', { pid: process.pid })
 

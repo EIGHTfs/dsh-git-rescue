@@ -76,8 +76,9 @@ setsid nohup bash /path/to/restart-script.sh > /dev/null 2>&1 < /dev/null &
 |----|------|
 | kill 后会话同步等待会断 | 永远先 setsid 后台化，再让脚本自己 kill |
 | `pkill -f` 匹配到自己 | 用精确 PID（`ps ... | grep runner.js | grep -v grep`） |
-| 测试实例（3083）无自动重拉 | dsh-test-instance.sh 手启，kill 后需脚本内 `setsid bash dsh-test-instance.sh &` 重新拉起 |
+| 测试实例（3083）无自动重拉 | dsh-test-instance.sh 手启，kill 后需脚本内 `setsid bash dsh-test-instance.sh &` 重新拉起（v1.5.1 起接管脚本内置：60s 未自动恢复 → 执行 DSH_START_CMD，默认探测 dsh-test-instance.sh 自动拉起） |
 | 主实例 runner（3081）由 fnOS s6 管理 | TERM runner 后 s6 自动重拉（实测 15~26s 恢复），不要手动 spawn dsh（会绕过 runner 的权限修复） |
+| 手动启动实例 kill 后永远等不到 | 接管脚本 60s 轮询超时后必须**主动拉起**（DSH_START_CMD 环境变量可覆盖默认命令）；只靠 s6 自动重拉的假设对手动启动实例不成立 |
 | 验证太快插件未加载 | 端口 200 ≠ 插件就绪，sleep 8~15s 再 curl 插件 API |
 | 日志在 /tmp 被清 | 日志/脚本落 workspace（跨沙箱可见），别用 /tmp |
 

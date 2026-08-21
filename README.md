@@ -7,7 +7,7 @@
 把 `.dsh` 用户目录（sessions 会话、settings、profiles 配置）与 `workspace` 纳入 git 版本管理，
 用 commit 历史做精细回退；harness 崩溃时自动回退到上一个好版本。远端备份**仅支持 GitHub token 方案**。
 
-**功能总览**（组件 C 当前 v1.5.0）：
+**功能总览**（组件 C 当前 v1.6.0）：
 
 | 功能 | 版本 | 一句话 |
 |------|------|--------|
@@ -16,6 +16,7 @@
 | **自动更新** | v1.3.0 | **强制跟随 GitHub 最新稳定版**：每次启动 30s 首查 + 每天定时，原子替换 + 失败回滚（隐藏开关 env 可关） |
 | **接管式重启** | v1.4.0 | **独立脚本接管 DSH 重启**：TERM→轮询恢复→验证→留痕，会话中断也能安全完成（配套 skill `docs/skill-dsh-restart-takeover.md`） |
 | **会话恢复联动** | v1.5.0 | **与 dsh-session-manager 协同**：崩溃后调用其 scan 自动续跑中断会话；装了才调用、没装跳过、不内置 |
+| **异常感知增强** | v1.6.0 | **flapping 检测**（无限重启识别+冷却）/ **业务就绪探活**（假活识别）/ **现场捕获**（stderr 落盘+TERM 来源追踪）/ **sessions 基线+增量**（控制仓库体积） |
 
 ![体系架构](docs/screenshots/architecture.svg)
 

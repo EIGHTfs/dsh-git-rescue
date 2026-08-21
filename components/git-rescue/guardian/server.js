@@ -16,9 +16,11 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { spawn } from 'node:child_process'
 import http from 'node:http'
 import { runGit, commit, headRef, markBad, lastGoodCommit, hardReset } from '../lib/git.js'
+import { createFlappingDetector } from '../lib/flapping.js'
+import { probeDshHealth } from '../lib/probe.js'
+import { startDshWithLog, captureExitContext } from '../lib/process-capture.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -31,10 +33,17 @@ const CFG = {
   dshStartCmd: process.env.DSH_START_CMD || '',
   autoRecover: process.env.GUARDIAN_AUTO_RECOVER !== '0',
   dshHome: process.env.DSH_HOME || join(process.env.USERPROFILE ?? process.env.HOME ?? homedir(), '.dsh'),
+  // flapping 检测（v1.6.0）：窗口内 ≥maxRestarts 次重启 → 升级处理（防"无限重启"无声）
+  flappingWindowMs: Number(process.env.GUARDIAN_FLAPPING_WINDOW_MS || 10 * 60 * 1000),
+  flappingMaxRestarts: Number(process.env.GUARDIAN_FLAPPING_MAX_RESTARTS || 3),
+  // 业务就绪探活（v1.6.0）：根通但 API 未就绪（假活）也算失败
+  probeApiPath: process.env.GUARDIAN_PROBE_API_PATH || '/api/status',
+  probeToolsPath: process.env.GUARDIAN_PROBE_TOOLS_PATH || '/api/tools',
 }
 
 const LOG_FILE = join(CFG.dshHome, 'git-rescue', 'guardian-dsh.log')
 const EVENTS_FILE = join(CFG.dshHome, 'git-rescue', 'guardian-events.jsonl')
+const STDERR_FILE = join(CFG.dshHome, 'git-rescue', 'dsh-stderr.log')
 
 // ============ 状态 ============
 const state = {
@@ -46,7 +55,14 @@ const state = {
   lastRecoveryResult: null,
   log: [],                   // [{time, level, msg}]
   manualBusy: false,
+  flappingCooldownUntil: null, // flapping 检出后的冷却截止时间（此期间不自动救援）
 }
+
+// flapping 检测器：记录每次"检出失败→恢复"或"重启"事件，识别反复拉起即崩
+const flapping = createFlappingDetector({
+  windowMs: CFG.flappingWindowMs,
+  maxRestarts: CFG.flappingMaxRestarts,
+})
 
 function log(level, msg) {
   const entry = { time: new Date().toISOString(), level, msg }
@@ -58,13 +74,19 @@ function log(level, msg) {
 
 // ============ DSH 健康检查 ============
 
+/**
+ * 业务就绪探活（v1.6.0，替代旧"GET / 200"）：
+ *  - healthy  ：根通 + 业务 API 通（+ 工具端点通）——真正健康
+ *  - degraded ：根通但业务端点失败 → 假活（服务未就绪），按失败处理触发救援
+ *  - down     ：根都不通 → 进程挂了
+ */
 async function probeDsh() {
-  try {
-    const res = await fetch(`http://${CFG.dshHost}:${CFG.dshPort}/`, {
-      signal: AbortSignal.timeout(5000),
-    })
-    return res.status >= 200 && res.status < 500
-  } catch { return false }
+  const r = await probeDshHealth(fetch, CFG.dshHost, CFG.dshPort, {
+    apiPath: CFG.probeApiPath,
+    toolsPath: CFG.probeToolsPath,
+  })
+  if (r.level === 'healthy') return { ok: true, level: 'healthy' }
+  return { ok: false, level: r.level, detail: r.detail }
 }
 
 // ============ DSH 进程管理 ============
@@ -95,11 +117,12 @@ function startDsh() {
   const cmd = resolveDshStartCmd()
   log('info', `启动 DSH: ${cmd}`)
   fs.mkdir(join(CFG.dshHome, 'git-rescue'), { recursive: true }).catch(() => {})
-  const child = spawn('sh', ['-c', `${cmd} >> "${LOG_FILE}" 2>&1 &`], {
-    detached: true,
-    stdio: 'ignore',
-    env: process.env,
-  })
+  // v1.6.0：stderr/stdout 落盘（dsh-stderr.log，滚动 500KB），崩溃时留证
+  const child = startDshWithLog(cmd, { logFile: STDERR_FILE })
+  if (!child) {
+    log('error', `DSH spawn 失败: ${cmd}`)
+    return
+  }
   child.unref()
 }
 
@@ -116,6 +139,15 @@ async function recover() {
   state.dsh = 'recovering'
   try {
     log('warn', '开始自动救援（git 回退）')
+
+    // 0) TERM 来源追踪（v1.6.0）：抓取进程退出上下文（/proc 残留 + stderr 尾部 + 系统日志），
+    //    写入事件流与 stderr 落盘，回答"谁发的 TERM / 为什么崩"
+    const pid = await findDshPid()
+    if (pid || (await readLogTail(STDERR_FILE, 1))) {
+      const ctx = await captureExitContext(pid, CFG.dshPort, { stderrFile: STDERR_FILE })
+      log('warn', `退出现场:\n${ctx}`)
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'exit-context', msg: ctx }) + '\n').catch(() => {})
+    }
 
     // 1) 保留坏现场
     const pre = await commit(CFG.dshHome, 'chore(guard): crash-recovery | pre-rollback snapshot of broken state')
@@ -142,7 +174,8 @@ async function recover() {
     const deadline = Date.now() + CFG.startWaitMs
     let ok = false
     while (Date.now() < deadline) {
-      if (await probeDsh()) { ok = true; break }
+      const p = await probeDsh()
+      if (p.ok) { ok = true; break }
       await new Promise((r) => setTimeout(r, 1000))
     }
     state.lastRecoveryResult = { ok, to: good, from: head, at: new Date().toISOString() }
@@ -168,21 +201,43 @@ async function recover() {
 
 async function tick() {
   if (state.manualBusy) return
-  const ok = await probeDsh()
-  if (ok) {
+  const p = await probeDsh()
+  if (p.ok) {
     if (state.dsh !== 'running') log('info', 'DSH 恢复健康')
     state.dsh = 'running'
     state.lastOkAt = Date.now()
     state.failCount = 0
     return
   }
+  // flapping 冷却期：检出无限重启后暂停自动救援，给人介入窗口
+  if (state.flappingCooldownUntil && Date.now() < state.flappingCooldownUntil) {
+    state.failCount = 0
+    return
+  }
   state.lastErrorAt = Date.now()
   state.failCount += 1
-  log('warn', `健康检查失败（连续 ${state.failCount}/${CFG.failThreshold}）`)
+  const level = p.level || 'down'
+  log('warn', `健康检查失败[${level}]（连续 ${state.failCount}/${CFG.failThreshold}）`)
   if (state.failCount >= CFG.failThreshold) {
     if (CFG.autoRecover) {
       state.failCount = 0
       await recover()
+      // flapping 检测：每次救援后记录一次"重启事件"；窗口内 ≥maxRestarts 次 → 升级处理
+      // （防"反复拉起即崩"的无限重启无人识别）
+      const flap = flapping.record(Date.now(), `recover#${state.lastRecoveryResult?.to || '?'}`)
+      if (flap.level === 'flapping') {
+        log('error', `🚨 flapping 检出：${CFG.flappingWindowMs / 60000} 分钟内 ${flap.count} 次重启——停止自动拉起循环，保留现场，告警人工介入`)
+        log('error', `flapping 详情: ${flap.restarts.map((r) => new Date(r.ts).toISOString()).join(' → ')}`)
+        // 升级处理：不再自动拉起（避免无限循环）；现场已由 recover() 的 commit 保留
+        // 事件落盘（guardian-events.jsonl 已有 log 记录；这里补一条显式 flapping 事件）
+        fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'flapping', msg: `flapping-detected: ${flap.count} restarts in ${CFG.flappingWindowMs / 60000}min` }) + '\n').catch(() => {})
+        // 冷却：重置 failCount 防止立即再次触发 recover 造成死循环；人工介入后 reset()
+        flapping.reset()
+        state.failCount = 0
+        // 暂停自动恢复一段时间（默认 10 分钟），给人介入窗口
+        state.flappingCooldownUntil = Date.now() + CFG.flappingWindowMs
+        log('warn', `flapping 冷却至 ${new Date(state.flappingCooldownUntil).toISOString()}（此期间不再自动救援）`)
+      }
     } else {
       log('warn', '达到失败阈值，但自动救援已关闭（GUARDIAN_AUTO_RECOVER=0）')
     }
@@ -231,6 +286,7 @@ function startWeb() {
             dsh: state.dsh, lastOkAt: state.lastOkAt, lastErrorAt: state.lastErrorAt,
             failCount: state.failCount, lastRecoveryAt: state.lastRecoveryAt,
             lastRecoveryResult: state.lastRecoveryResult,
+            flapping: { restarts: flapping.restarts, cooldownUntil: state.flappingCooldownUntil },
           },
           config: CFG,
           log: state.log.slice(-100),

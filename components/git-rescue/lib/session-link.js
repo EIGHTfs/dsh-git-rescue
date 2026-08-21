@@ -13,8 +13,8 @@
  */
 
 export const SM_API = {
-  probe: '/api/session-manager/list',     // GET：探测是否安装
-  scan: '/api/session-manager/scan',      // POST：扫描并自动续跑
+  probe: '/api/session-manager/list',     // GET：探测（0.4+ 有）
+  scan: '/api/session-manager/scan',      // POST：扫描并自动续跑（0.3+ 有）
   continue: '/api/session-manager/continue', // POST：续跑单会话 {sessionId}
 }
 
@@ -25,32 +25,33 @@ function dshBaseUrl() {
 }
 
 /**
- * 探测 session-manager 是否安装可用。
+ * 探测 session-manager 是否安装可用（只读探测，无副作用）。
+ * 兼容多版本：GET list（0.4+）或 GET scan（0.3+，返回 405/200 都说明路由存在）。
+ * 注意：不 POST scan 做探测（避免探测即触发续跑）。
  * @returns {Promise<boolean>}
  */
 export async function sessionManagerAvailable() {
-  try {
-    const res = await fetch(`${dshBaseUrl()}${SM_API.probe}`, {
-      signal: AbortSignal.timeout(3000),
-    })
-    return res.status >= 200 && res.status < 300
-  } catch {
-    return false // 未安装/未响应 → 视为不可用，静默跳过
+  for (const path of [SM_API.probe, SM_API.scan]) {
+    try {
+      const res = await fetch(`${dshBaseUrl()}${path}`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(3000),
+      })
+      // 200/404/405/500 都说明路由存在（插件已装）；000/网络错误才说明没装
+      if (res.status !== 0) return true
+    } catch { /* 继续试下一个端点 */ }
   }
+  return false // 两个端点都不响应 → 未安装
 }
 
 /**
- * 触发会话恢复联动：
- *  - 未安装 session-manager → 跳过（不报错，记录事件 skipped）
- *  - 已安装 → 调用 scan 自动续跑全部可续会话
+ * 触发会话恢复联动（探测 + 调用合并）：
+ *  - POST scan：返回 200/4xx = session-manager 已装且联动成功；000/网络错误 = 未装，跳过
+ *  - scan 幂等安全（session-manager 自带冷却/并发护栏），作为崩溃恢复的一部分可接受
+ *  - 兼容 0.3+（scan 路由 0.3 已有）与 0.6+（含 list/continue 等）
  * @returns {{ok:boolean, linked:boolean, skipped:boolean, status?:number, detail?:string}}
  */
 export async function linkSessionRecovery({ action = 'scan', sessionId = null, reason = '' } = {}) {
-  const available = await sessionManagerAvailable()
-  if (!available) {
-    return { ok: true, linked: false, skipped: true, detail: 'session-manager 未安装，跳过会话恢复联动' }
-  }
-
   try {
     let path = SM_API.scan
     let body = null
@@ -64,6 +65,9 @@ export async function linkSessionRecovery({ action = 'scan', sessionId = null, r
       body,
       signal: AbortSignal.timeout(15_000),
     })
+    if (res.status === 0) {
+      return { ok: true, linked: false, skipped: true, detail: 'session-manager 未安装，跳过会话恢复联动' }
+    }
     const data = await res.json().catch(() => null)
     const ok = res.status >= 200 && res.status < 300
     return {
@@ -74,7 +78,7 @@ export async function linkSessionRecovery({ action = 'scan', sessionId = null, r
       detail: ok ? (data?.message || `scan 已触发（${reason || '崩溃恢复'}）`) : `scan 返回 HTTP ${res.status}`,
     }
   } catch (e) {
-    // 联动失败静默：不影响 git-rescue 主流程
-    return { ok: false, linked: true, skipped: false, detail: `session-manager 联动失败: ${String(e?.message ?? e)}` }
+    // 联动失败静默：不影响 git-rescue 主流程（含未安装导致的连接失败）
+    return { ok: false, linked: false, skipped: true, detail: `session-manager 联动失败/未安装: ${String(e?.message ?? e)}` }
   }
 }

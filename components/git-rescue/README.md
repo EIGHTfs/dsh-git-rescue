@@ -1,4 +1,4 @@
-# 🛟 dsh-git-rescue（组件 C）v1.4.0
+# 🛟 dsh-git-rescue（组件 C）v1.6.0
 
 **DSH git 版本管理 + 崩溃自动救援** —— 仅 GitHub token 方案。
 
@@ -40,6 +40,12 @@
   - Agent 工具 `git_rescue_link_recovery` + `POST /api/git-rescue/link-session-recovery`（手动触发）
   - status 输出 `sessionLink` 字段（available/lastResult）
 
+- **v1.6.0 功能六：异常感知增强（flapping 检测 / 业务就绪探活 / 现场捕获 / sessions 基线）**
+  - **flapping 检测器**（`lib/flapping.js`）：guardian 记录每次救援重启，窗口内（默认 10 分钟）≥3 次 → 判定"无限重启"→ 停止自动拉起循环 + 冷却期（默认 10 分钟）+ 事件留痕，防"反复拉起即崩"无人识别；可配 `GUARDIAN_FLAPPING_WINDOW_MS` / `GUARDIAN_FLAPPING_MAX_RESTARTS`
+  - **业务就绪探活**（`lib/probe.js`）：guardian 健康检查从"GET / 200"升级为分级探测——healthy（根+API+tools 全通）/ **degraded（根通但 API 404 = 假活，按失败触发救援）** / down；可配 `GUARDIAN_PROBE_API_PATH` / `GUARDIAN_PROBE_TOOLS_PATH`
+  - **现场捕获**（`lib/process-capture.js`）：guardian 启动 DSH 时 stderr/stdout 落盘 `git-rescue/dsh-stderr.log`（滚动 500KB）；救援时抓取退出现场（/proc 残留 + stderr 尾部 + journalctl/dmesg）→ 写入事件流，回答"谁发的 TERM / 为什么崩"
+  - **sessions 基线+增量策略**：sessions/storages 移出常规增量 commit（zstd 二进制变化大），改为**定期全量基线**（默认每天，可配 `sessionsBaselineMs`；启动 5 分钟后首跑）——`git add -f` 强制入库 → 基线 commit → `git rm --cached` 恢复忽略；控制仓库体积增长
+
 ## 已验证（2026-08-18，测试实例 3083）
 
 - 单元测试 19/19（含真实 GitHub 推送建仓/推两次/清理）
@@ -75,6 +81,8 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.6.0 | 功能6：异常感知增强——flapping 检测（无限重启识别+冷却）/ 业务就绪探活（假活识别）/ 现场捕获（stderr 落盘+TERM 追踪）/ sessions 基线+增量策略 |
+| 1.5.1 | 修复（严重）：接管式重启增加「超时后主动拉起」——手动启动的实例（如测试实例 dsh-test-instance.sh）kill 后无自动重拉，60s 未恢复则执行 DSH_START_CMD（默认测试实例脚本）主动拉起，再轮询 240s |
 | 1.5.0 | 功能5：会话恢复联动（session-manager 装了才调用 scan 续跑，没装跳过，不内置） |
 | 1.4.1 | 修复（严重）：接管式重启脚本不再 kill -9 runner（SIGKILL 触发 s6 退避，重拉延迟 15s→4min），只发 TERM；轮询窗口 150s→240s |
 | 1.4.0 | 功能4：接管式重启（独立脚本重启+验证，规避会话中断；配套 skill 档案） |
