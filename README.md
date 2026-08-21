@@ -478,6 +478,28 @@ dsh-git-rescue/
 
 **版本**：2.3.0 → 2.4.0。
 
+## ✅ 2.3.1 系统负载监测与熔断（2026-08-22，小版本 — 防死循环进程拖垮系统）
+
+**背景**：本机 2026-08-22 崩溃事件——死循环解码损坏 zstd 会话日志的进程（91% CPU / 200MB+）把内存+CPU 撑爆 → 系统崩溃重启 → 正在写入的会话文件被截断损坏（EIO）。此前 guardian 只能事后救援，无法**事前发现**高负载进程。
+
+**能力**：
+
+| 项 | 说明 |
+|----|------|
+| `loadWatch()`（guardian 定时采样） | 每个 tick 读 `/proc/meminfo` 可用内存 + `ps -eo` 采样进程 CPU/RSS，识别「持续高 CPU 的死循环级进程」 |
+| 熔断 kill | 单进程 CPU ≥95%（默认）且内存 ≤200MB（防误杀主 DSH）且连续 3 次采样超阈值 → `SIGKILL`；guardian/runner/主 DSH 通过 cmd 正则豁免，**绝不误杀** |
+| 内存告警 | 可用内存 <512MB → 记事件 + 网页告警 | 
+| 联动降载（③） | 高负载持续 30s → 调 session-manager `auto-continue-gate=closed` 暂停自动续跑（装了才调，fail-soft） |
+| 插件侧负载快照 | `collectStatus` 新增 `load` 字段（可用内存/loadavg），`git_rescue_status` 工具展示「系统内存: 可用 XMB」 |
+| 可配置开关 | env：`GUARDIAN_LOADWATCH_ENABLED=0` 关 / `GUARDIAN_LOAD_FREEMB_MIN` / `GUARDIAN_LOAD_CPU_MAX` / `GUARDIAN_LOAD_KILL_CPU` / `GUARDIAN_LOAD_KILL_RETAIN_MB` / `GUARDIAN_LOAD_KILL_CONSEC` / `GUARDIAN_LOAD_STOP_GATE=0` 关联动 |
+| 事件留痕 | 熔断 kill 写 `loadwatch-kill` 事件，内存告警写 `highload-gate-closed` |
+
+**测试**：熔断防误杀逻辑单测 4/4（主 DSH 高 CPU 不杀 / guardian 不杀 / 死循环解码杀 / 批量 hash 杀）。
+
+**配套 skill**：`low-load-task-discipline`（AI 侧低负载纪律，同源确立）+ `long-silence-ack`（长时间没回复打招呼）。
+
+**版本**：2.2.2 → 2.3.1（一次提交一个小版本；含负载监测/熔断/联动三功能）。
+
 ## 🔗 联动与源码地址
 
 ### 联动：自动续跑全局闸门（dsh-git-rescue ⇄ dsh-session-manager）

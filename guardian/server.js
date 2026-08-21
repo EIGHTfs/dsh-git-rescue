@@ -18,6 +18,8 @@
  */
 
 import { promises as fs } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import http from 'node:http'
@@ -69,6 +71,14 @@ const CFG = {
   proxyTargetHost: process.env.GUARDIAN_PROXY_TARGET_HOST || '127.0.0.1',
   proxyTargetPort: Number(process.env.GUARDIAN_PROXY_TARGET_PORT || 3081),
   workspace: process.env.DSH_WORKSPACE || '/vol1/@appshare/DeepSeekHarness/workspace',
+  // ===== 系统负载监测与熔断（v2.3.1，2026-08-22 教训：死循环解码进程把系统拖崩）=====
+  loadWatchEnabled: process.env.GUARDIAN_LOADWATCH_ENABLED !== '0', // 默认开启
+  loadMemFreeMbMin: Number(process.env.GUARDIAN_LOAD_FREEMB_MIN || 512), // 可用内存低于此值触发告警
+  loadCpuPctMax: Number(process.env.GUARDIAN_LOAD_CPU_MAX || 90), // 单进程持续 CPU 阈值（告警）
+  loadKillCpuPct: Number(process.env.GUARDIAN_LOAD_KILL_CPU || 95), // 死循环级 CPU → 熔断 kill
+  loadKillMaxRetainMb: Number(process.env.GUARDIAN_LOAD_KILL_RETAIN_MB || 200), // 熔断仅限小内存进程（防误杀主 DSH）
+  loadKillConsecutiveCount: Number(process.env.GUARDIAN_LOAD_KILL_CONSEC || 3), // 连续 N 次超阈值才 kill（防误杀）
+  loadContinueStopGate: process.env.GUARDIAN_LOAD_STOP_GATE !== '0', // 高负载时联动暂停自动续跑
 }
 
 // 是否救援环境（Save-clean / Save-test）：救援环境不自动 git 回退（开发者自行解决）
@@ -104,6 +114,8 @@ const state = {
   // 最近一次故障分类上下文（tick 里 classifyFault 后暂存，recover 里用于诊断报告/救机清单）
   lastFault: null,
   lastFaultReason: '',
+  // 负载监测（v2.3.1）：最近一次采样 + 熔断命中缓存
+  load: { lastSample: null, lastScanAt: null, highLoadSince: null, killed: [], alerts: [] },
 }
 
 // flapping 检测器：记录每次"检出失败→恢复"或"重启"事件，识别反复拉起即崩
@@ -1095,6 +1107,8 @@ async function closeAutoContinueGate() {
 
 async function tick() {
   if (state.manualBusy) return
+  // 系统负载监测（v2.3.1）：内存/CPU 采样 + 死循环熔断 kill + 联动暂停续跑。独立 try-catch fail-soft。
+  try { await loadWatch() } catch (e) { log('warn', `loadWatch 失败（降级不影响主流程）: ${String(e?.message ?? e)}`) }
   const p = await probeDsh()
   if (p.ok) {
     const wasDown = state.dsh !== 'running'
@@ -1184,6 +1198,116 @@ async function tick() {
   }
 }
 
+// ============ 系统负载监测与熔断（v2.3.1）============
+// 背景（2026-08-22 崩溃教训）：死循环解码 zstd 会话日志的进程（91% CPU / 200MB+）把本机内存+CPU 撑爆
+// → 系统崩溃重启，正在写入的会话文件被截断损坏（EIO）。本模块周期性采样系统内存/CPU，
+// 找出「持续高 CPU 的死循环级进程」并熔断 kill（限小内存进程，防误杀主 DSH），同时记录事件 + 联动暂停续跑。
+
+/** 读取 /proc/meminfo 的可用内存（KB）。无则返回 null（低负载监测静默降级，不影响主流程）。 */
+function readMemFreeMb() {
+  try {
+    const data = readFileSync('/proc/meminfo', 'utf8')
+    const m = data.match(/^MemAvailable:\s+(\d+)\s*kB/im)
+    if (m) return Math.round(Number(m[1]) / 1024)
+    const free = data.match(/^MemFree:\s+(\d+)\s*kB/im)
+    return free ? Math.round(Number(free[1]) / 1024) : null
+  } catch { return null }
+}
+
+/** 一次 ps 采样：返回 [{pid, cpuPct, rssKb, cmd}]，进程按 CPU 降序。失败返回空数组。 */
+function sampleProcesses() {
+  return new Promise((resolve) => {
+    const child = spawn(process.platform === 'win32' ? 'powershell' : 'ps',
+      process.platform === 'win32'
+        ? ['-NoProfile', '-Command', 'Get-Process | Select-Object Id,CPU,WorkingSet,ProcessName | ConvertTo-Json -Compress']
+        : ['-eo', 'pid,pcpu,rss,cmd'], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout.on('data', (d) => { out += d })
+    child.on('close', () => {
+      if (process.platform === 'win32') return resolve([]) // Windows ps 采样降级（无 pcpu 快照语义）
+      const rows = []
+      for (const line of out.split('\n')) {
+        const t = line.trim()
+        if (!t) continue
+        const m = t.match(/^\s*(\d+)\s+([\d.]+)\s+(\d+)\s+(.+)$/)
+        if (!m) continue
+        rows.push({ pid: Number(m[1]), cpuPct: Number(m[2]), rssKb: Number(m[3]), cmd: m[4] })
+      }
+      resolve(rows)
+    })
+    child.on('error', () => resolve([]))
+  })
+}
+
+/** 高负载时联动暂停会话自动续跑（装了 session-manager 才调用，fail-soft）。 */
+async function stopSessionAutoContinue(reason) {
+  if (!CFG.loadContinueStopGate) return
+  try {
+    const res = await fetch(`http://${CFG.dshHost}:${CFG.dshPort}/api/session-manager/auto-continue-gate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gate: 'closed' }),
+      signal: AbortSignal.timeout(3000),
+    })
+    if (res.status === 200) {
+      log('warn', `🚦 系统高负载——已联动暂停会话自动续跑（${reason}）`)
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'highload-gate-closed', msg: reason }) + '\n').catch(() => {})
+    } else {
+      log('warn', `⛓️ 高负载联动暂停续跑失败（HTTP ${res.status}）：${reason}`)
+    }
+  } catch (e) {
+    log('warn', `⛓️ 高负载联动暂停续跑：session-manager 未装/不可达（${String(e?.message ?? e)}）`)
+  }
+}
+
+/** 系统负载监测 + 熔断（每次 tick 调用） */
+async function loadWatch() {
+  if (!CFG.loadWatchEnabled) return
+  const freeMb = readMemFreeMb()
+  const events = []
+  const sample = await sampleProcesses()
+  const top = sample.slice(0, 10)
+
+  // 找「死循环级高 CPU + 小内存」进程（熔断候选：正是拖崩系统的 zstd 解码/批量 hash）
+  const runaway = sample.find((p) =>
+    p.cpuPct >= CFG.loadKillCpuPct && p.rssKb <= CFG.loadKillMaxRetainMb * 1024 && !/^node\s+[-]+|guardian|runner\.js|bin\.js\s+web/i.test(p.cmd)
+  )
+  // 支持连续 N 次超阈值才 kill（防误杀瞬时尖峰）
+  const key = runaway ? String(runaway.pid) : ''
+  const prev = state.load.killSeq || {}
+  if (runaway) {
+    prev[key] = (prev[key] || 0) + 1
+    if (prev[key] >= CFG.loadKillConsecutiveCount) {
+      try { process.kill(runaway.pid, 'SIGKILL') } catch {}
+      events.push(`熔断 kill 死循环进程 ${runaway.pid}（${runaway.cmd.slice(0, 60)}，CPU ${runaway.cpuPct}%）`)
+      state.load.killed = [...(state.load.killed || []), { pid: runaway.pid, cpuPct: runaway.cpuPct, rssKb: runaway.rssKb, cmd: runaway.cmd, at: new Date().toISOString() }]
+      delete prev[key]
+      log('warn', `⚠️ 熔断 kill 高 CPU 进程 ${runaway.pid}（${runaway.cpuPct}% CPU）——疑似死循环`)
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'loadwatch-kill', pid: runaway.pid, cpuPct: runaway.cpuPct, rssKb: runaway.rssKb, cmd: runaway.cmd }) + '\n').catch(() => {})
+    }
+  } else {
+    // 被熔断进程已被解决 / 无死循环 → 重置计数
+    for (const k of Object.keys(prev)) if (!sample.some((p) => String(p.pid) === k)) delete prev[k]
+  }
+  state.load.killSeq = prev
+
+  // 内存告警（低水位）
+  if (freeMb !== null && freeMb < CFG.loadMemFreeMbMin) {
+    events.push(`内存低：可用 ${freeMb}MB < ${CFG.loadMemFreeMbMin}MB`)
+    if (!state.load.highLoadSince) state.load.highLoadSince = Date.now()
+    // 高负载持续阈值后联动暂停续跑（防雪上加霜）
+    if (Date.now() - state.load.highLoadSince > 30_000) await stopSessionAutoContinue(`可用内存仅 ${freeMb}MB`)
+  } else {
+    state.load.highLoadSince = null
+  }
+
+  state.load.lastSample = { freeMb, top, at: new Date().toISOString() }
+  state.load.lastScanAt = Date.now()
+  for (const e of events.slice(-20)) {
+    state.load.alerts = [...(state.load.alerts || []).slice(-50), { time: new Date().toISOString(), msg: e }]
+  }
+}
+
 // ============ HTTP（状态/控制/UI） ============
 
 function send(res, code, obj) {
@@ -1233,6 +1357,15 @@ function startWeb() {
             lastRecoveryResult: state.lastRecoveryResult,
             manualStop: state.manualStop,
             flapping: { restarts: flapping.restarts, cooldownUntil: state.flappingCooldownUntil },
+          },
+          load: {
+            enabled: CFG.loadWatchEnabled,
+            lastScanAt: state.load.lastScanAt,
+            freeMb: state.load.lastSample?.freeMb ?? null,
+            highLoadSince: state.load.highLoadSince,
+            top: state.load.lastSample?.top?.slice(0, 5) ?? [],
+            killed: state.load.killed ?? [],
+            alerts: state.load.alerts ?? [],
           },
           config: CFG,
           log: state.log.slice(-100),
