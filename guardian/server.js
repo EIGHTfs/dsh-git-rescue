@@ -113,11 +113,19 @@ const flapping = createFlappingDetector({
 })
 
 function log(level, msg) {
-  const entry = { time: new Date().toISOString(), level, msg }
+  // 2026-08-21 用户要求：监控日志显示本地时间（原 UTC slice 差 8 小时）
+  const now = new Date()
+  const entry = { time: now.toISOString(), timeLocal: formatLocalTime(now), level, msg }
   state.log.push(entry)
   if (state.log.length > 500) state.log = state.log.slice(-500)
-  console.log(`[${entry.time.slice(11, 19)}][${level}] ${msg}`)
+  console.log(`[${entry.timeLocal}][${level}] ${msg}`)
   fs.appendFile(EVENTS_FILE, JSON.stringify(entry) + '\n').catch(() => {})
+}
+
+/** 格式化本地时间 HH:MM:SS（CST/本地时区，配合 GUI 监控日志显示）。 */
+function formatLocalTime(d) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
 // ============ DSH 健康检查 ============

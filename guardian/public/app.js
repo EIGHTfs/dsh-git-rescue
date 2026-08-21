@@ -124,7 +124,7 @@
     for (const entry of r.log.slice(-100)) {
       const div = document.createElement('div');
       div.className = 'l ' + entry.level;
-      const ts = (entry.time || '').slice(11, 19);
+      const ts = entry.timeLocal || (entry.time || '').slice(11, 19);
       div.textContent = `[${ts}] ${entry.msg}`;
       el.appendChild(div);
     }
