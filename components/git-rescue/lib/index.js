@@ -261,6 +261,86 @@ async function runAutoUpdateCheck() {
   }
 }
 
+// ---------- 接管式重启（dsh-restart-takeover 方案） ----------
+
+/**
+ * 接管式重启 DSH：生成独立脚本 → setsid 脱离进程组 → 脚本负责
+ *  TERM runner → 轮询端口恢复 → 验证插件 API → 结果写日志文件。
+ *
+ * 为什么必须独立进程：DSH 重启会中断所有会话（含当前回合），任何同步
+ * 的"kill → 等恢复 → 验证"都会在 kill 瞬间断掉。脚本脱离后自持完整流程，
+ * 会话恢复后再读日志文件确认结果。
+ *
+ * @returns {{ok:boolean, logFile:string, message:string}}
+ */
+async function takeoverRestart() {
+  const logFile = join(STATE_ROOT, 'restart-latest.log')
+  const scriptFile = join(STATE_ROOT, 'restart-takeover.sh')
+  const port = process.env.DSH_PORT || 3081
+  const host = process.env.DSH_HOST || '127.0.0.1'
+  const ws = process.env.TEST_DSH_PORT ? '' : '0' // 测试实例脚本管理，主实例走 runner/s6
+
+  // 独立脚本内容（含完整重启+验证流程，脱离 DSH 后自持）
+  const script = `#!/bin/bash
+# dsh-git-rescue 接管式重启（自动生成，dsh-restart-takeover 方案）
+LOG="${logFile}"
+: > "$LOG"
+echo "[$(date +%T)] 接管式重启开始 (port=${port})" >> "$LOG"
+
+# 1) 先落一条"重启中"事件（插件自身可能马上断，靠文件留痕）
+echo "[$(date +%T)] 触发重启: TERM runner（主实例 s6 自动重拉）" >> "$LOG"
+
+# 2) 找 runner 并 TERM（主实例 runner.js；若找不到则回退到找 dsh web 进程）
+RPID=$(ps -eo pid,args | grep "bin/runner.js" | grep -v grep | awk '{print $1}' | head -1)
+if [ -z "$RPID" ]; then
+  RPID=$(ps -eo pid,args | grep "bin.js web" | grep -v grep | grep -- "--port ${port}" | awk '{print $1}' | head -1)
+  echo "[$(date +%T)] 未找到 runner，回退 TERM dsh web PID=$RPID" >> "$LOG"
+fi
+echo "[$(date +%T)] 目标 PID=$RPID" >> "$LOG"
+if [ -n "$RPID" ]; then
+  kill "$RPID" 2>/dev/null
+  sleep 2
+  kill -0 "$RPID" 2>/dev/null && kill -9 "$RPID" 2>/dev/null
+else
+  echo "[$(date +%T)] ❌ 未找到任何 DSH 进程（可能已停机？）" >> "$LOG"
+fi
+
+# 3) 轮询端口恢复（最多 150s）
+UP=0
+for i in $(seq 1 30); do
+  sleep 5
+  if curl -s -o /dev/null -w "%{http_code}" "http://${host}:${port}/" -m 3 2>/dev/null | grep -q 200; then
+    UP=1; echo "[$(date +%T)] 服务恢复 (第 $i 轮)" >> "$LOG"; break
+  fi
+  echo "[$(date +%T)] 等待恢复... ($i/30)" >> "$LOG"
+done
+
+# 4) 恢复后等插件加载，验证 git-rescue API
+if [ "$UP" = 1 ]; then
+  sleep 10
+  echo "[$(date +%T)] --- /api/git-rescue/status ---" >> "$LOG"
+  curl -s "http://${host}:${port}/api/git-rescue/status" -m 5 >> "$LOG" 2>&1
+  echo "" >> "$LOG"
+  echo "[$(date +%T)] ✅ 接管式重启完成" >> "$LOG"
+else
+  echo "[$(date +%T)] ❌ 服务未在 150s 内恢复" >> "$LOG"
+fi
+`
+  await fs.mkdir(STATE_ROOT, { recursive: true })
+  await fs.writeFile(scriptFile, script, { mode: 0o700 })
+
+  // setsid 脱离进程组启动；脚本完全独立于本进程
+  const { spawn } = await import('node:child_process')
+  const child = spawn('setsid', ['nohup', 'bash', scriptFile], {
+    detached: true, stdio: 'ignore',
+    env: { ...process.env, DSH_PORT: String(port), DSH_HOST: host },
+  })
+  child.unref()
+
+  await appendEvent('restart-takeover', { logFile })
+  return { ok: true, logFile, message: `接管式重启已启动：DSH 即将重启，会话会中断；重启与验证由独立脚本完成，结果写入 ${logFile}（约 30~60s 后可查看）` }
+}
+
 // ---------- 定时器 ----------
 
 function startTimers() {
@@ -367,6 +447,22 @@ async function handleApi(req, res, url, method) {
     return send(res, 200, { ok: true, heartbeat: await writeHeartbeat() })
   }
 
+  // 接管式重启：独立脚本接管 TERM → 轮询恢复 → 验证，规避会话中断
+  if (method === 'POST' && path === '/api/git-rescue/restart') {
+    const r = await takeoverRestart()
+    return send(res, 200, r)
+  }
+
+  // 查看最近一次接管式重启的结果日志
+  if (method === 'GET' && path === '/api/git-rescue/restart-log') {
+    try {
+      const raw = await fs.readFile(join(STATE_ROOT, 'restart-latest.log'), 'utf8')
+      return send(res, 200, { ok: true, log: raw })
+    } catch {
+      return send(res, 200, { ok: true, log: '（暂无接管式重启日志）' })
+    }
+  }
+
   // 手动触发自动更新检查（不应用，只检查）；带 ?apply=1 则直接应用
   if (method === 'POST' && path === '/api/git-rescue/auto-update') {
     const token = await readToken()
@@ -464,6 +560,10 @@ export async function apply(ctx) {
       const repo = cfg.githubRepo || (await defaultBackupRepo(STATE_ROOT))
       const r = await pushSnapshot(token, cfg.githubOwner || '', repo, DSH_ROOT, `dsh-git-rescue backup @ ${ts()}`)
       return r.ok ? `已推送 ${r.files} 个文件 → ${r.url} (${r.commit.slice(0, 8)})` : `推送失败: ${r.error}`
+    }))
+    tools.register(defineToolSimple('git_rescue_restart', '接管式重启 DSH（独立脚本 TERM→轮询恢复→验证；当前会话会中断，结果写入 restart-latest.log 供后续查看）', async () => {
+      const r = await takeoverRestart()
+      return r.message
     }))
   }
 

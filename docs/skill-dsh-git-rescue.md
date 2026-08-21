@@ -34,6 +34,8 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 | 1.2.0 | 功能2：guardian 独立救援进程（探活/坏点标记/git回退/拉起/自检/web UI） |
 | 1.2.1 | 修复：备份仓名改用设备指纹 machine-id（不再依赖主机名） |
 | 1.2.2 | 修复：工具注册补 `parameters` 字段（defineToolSimple 默认 `{type:'object',properties:{}}`，backup 声明 reason、log 声明 n），修复 Agent 调用 `git_rescue_*` 整轮失败（缺 parameters → schema 投影抛 "must be lossless JSON"）；实测 ToolRuntime schemas()/sdkSchemas() 6 工具全投影通过 |
+| 1.3.0 | 功能3：自动更新（强制跟随 GitHub 最新稳定版，隐藏开关 env 可关；启动 30s 首查 + 每 6h 定时，原子替换+回滚） |
+| 1.4.0 | 功能4：接管式重启（独立脚本 TERM→轮询恢复→验证→留痕，规避会话中断；配套 skill `docs/skill-dsh-restart-takeover.md`） |
 
 ## 二、崩溃检测与救援机制（实测事实，勿改动默认行为）
 

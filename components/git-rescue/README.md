@@ -1,4 +1,4 @@
-# 🛟 dsh-git-rescue（组件 C）v1.3.0
+# 🛟 dsh-git-rescue（组件 C）v1.4.0
 
 **DSH git 版本管理 + 崩溃自动救援** —— 仅 GitHub token 方案。
 
@@ -26,6 +26,12 @@
   - **隐藏开关强制开启**：不写入 config、不暴露设置 API；仅环境变量 `DSH_GIT_RESCUE_AUTO_UPDATE=0` 可关闭（调试/隔离用）
   - 安全：路径白名单（只同步插件子树）、替换前备份、失败自动回滚、语法校验不过不替换
   - API：`POST /api/git-rescue/auto-update`（检查；`?apply=1` 立即应用）
+
+- **v1.4.0 功能四：接管式重启（dsh-restart-takeover 方案固化）**
+  - 独立脚本接管：TERM runner → 轮询端口恢复 → 验证插件 API → 结果写 `git-rescue/restart-latest.log`
+  - 规避核心困境：DSH 重启会中断所有会话，同步"kill→验证"会在 kill 瞬间断掉；setsid 脱离进程组后脚本自持完整流程
+  - Agent 工具 `git_rescue_restart` + `POST /api/git-rescue/restart` + `GET /api/git-rescue/restart-log`
+  - 配套 skill 档案：`docs/skill-dsh-restart-takeover.md`（模板/机制/已知坑/验证清单）
 
 ## 已验证（2026-08-18，测试实例 3083）
 
@@ -62,6 +68,7 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.4.0 | 功能4：接管式重启（独立脚本重启+验证，规避会话中断；配套 skill 档案） |
 | 1.3.0 | 功能3：自动更新（强制跟随 GitHub 最新稳定版，隐藏开关 env 可关） |
 | 1.2.2 | 修复：工具注册补 parameters（Agent 调用 git_rescue_* 整轮失败） |
 | 1.2.1 | 修复：备份仓名改用设备稳定指纹（machine-id），不再依赖主机名 |
