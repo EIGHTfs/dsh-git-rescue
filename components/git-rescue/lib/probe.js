@@ -20,8 +20,13 @@
 
 export const DEFAULT_PROBE = {
   rootPath: '/',
-  apiPath: '/api/status',
-  toolsPath: '/api/tools',
+  // 业务就绪端点默认用本插件自己的 status API：
+  //  - 200 = 插件已加载 + DSH 服务就绪（比 DSH 自身（无 /api/status）更可靠）
+  //  - 404/其他 = 假活（进程在但插件/服务未就绪）
+  apiPath: '/api/git-rescue/status',
+  // tools 枚举探测默认关闭：DSH 无标准 /api/tools HTTP 端点（404 非"未就绪"），
+  // 探活以「根 + 插件 status」为准已足够区分假活；需要时可显式配置
+  toolsPath: null,
   timeoutMs: 5000,
   // 业务端点视为健康的状态码范围（DSH API 正常返回 2xx；404=路由未就绪/白屏）
   apiOkStatus: [200, 201, 202, 204],

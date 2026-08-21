@@ -6,7 +6,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 
 # dsh-git-rescue 项目指南
 
-> 经验来源：2026-08-18 开发会话（session-0df5a0ce）+ 仓库 `docs/crash-records-test-env.md`（测试环境崩溃记录）+ `docs/harness-startup-failure-log.md`（生产启动失败史）。核心原则：**历史即资产，救援 = git 回退，测试 = 故意破坏**。
+> 核心原则：**历史即资产，救援 = git 回退，测试 = 故意破坏**。
 
 ## 一、项目结构与版本
 
@@ -36,6 +36,8 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 | 1.2.2 | 修复：工具注册补 `parameters` 字段（defineToolSimple 默认 `{type:'object',properties:{}}`，backup 声明 reason、log 声明 n），修复 Agent 调用 `git_rescue_*` 整轮失败（缺 parameters → schema 投影抛 "must be lossless JSON"）；实测 ToolRuntime schemas()/sdkSchemas() 6 工具全投影通过 |
 | 1.3.0 | 功能3：自动更新（强制跟随 GitHub 最新稳定版，隐藏开关 env 可关；每次启动 30s 首查 + 每 24h 定时，原子替换+回滚） |
 | 1.4.0 | 功能4：接管式重启（独立脚本 TERM→轮询恢复→验证→留痕，规避会话中断；配套 skill `docs/skill-dsh-restart-takeover.md`） |
+| 1.5.1 | 修复（严重）：接管式重启 60s 未恢复主动拉起（DSH_START_CMD/测试实例脚本），再轮询 240s |
+| 1.6.0 | 功能6：异常感知增强——flapping 检测 / 业务就绪探活（假活识别）/ 现场捕获（stderr 落盘+TERM 追踪）/ sessions 基线+增量 |
 
 ## 二、崩溃检测与救援机制（实测事实，勿改动默认行为）
 
@@ -61,7 +63,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 - guardian 灭门级救援（破坏 cordis.patch.yml 致无法启动）：3×10s 检出 → 坏点标记 → 秒级回退 → 拉起 → **5 秒自愈**
 - 每次崩溃/回退都留可复盘 commit + bad 标记（`git show bad-*` 可见损坏现场）
 
-## 三、测试方法：故意破坏矩阵（用户指定的核心测试哲学）
+## 三、测试方法：故意破坏矩阵（核心测试哲学）
 
 **不测"正常"，专测"搞破坏"**。5 类破坏全部在测试实例实测通过：
 
@@ -78,7 +80,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 - ⚠️ **主实例 test-sync 类插件会自动重启测试实例**（监听测试实例 cordis.patch.yml 变更）——崩溃测试前先确认无此类干扰，或禁用
 - 单测运行：`GITHUB_TOKEN=xxx node test-git-rescue.mjs`（T6 真实推送需 token；当前 23/23 通过）
 
-## 四、已知坑（本会话踩过并修复）
+## 四、已知坑
 
 | 坑 | 修复 |
 |----|------|
@@ -137,4 +139,4 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 | **组件 A snapshot-archive（zip 快照）** | ✅ **已修复并实测（2026-08-18）**：v1.0.1 修 3 bug——① register 旧签名→对象签名 ② tools 缺 output.schema（原致命：插件树加载失败）③ 不认 DSH_HOME（原快照目录写错）。隔离环境实测：status/创建快照/列表/zip 三平台恢复脚本 全通过 |
 | **组件 B guardian（zip 版守护）** | ✅ **实测通过（2026-08-18）**：多快照逐个回退验证——新快照(坏配置)恢复后启动失败被跳过 → 旧快照(好配置)恢复 → 启动成功。⚠️ 设计注意：B **不读 `DSH_HOME` 环境变量**，快照源写死 `$HOME/.dsh/snapshot-archive/<profile>`，测试/部署需用 `HOME` 指向正确位置（或用它自带配置文件时注意） |
 | sessions 基线+增量策略 | ⚠️ 未实现（后续优化项） |
-| 主实例安装 | ⚠️ 未做（方案已备，见 `docs/p0-main-instance-deploy-plan.md`，需用户确认时机/重启） |
+| 主实例安装 | ⚠️ 未做（方案已备，见 `docs/p0-main-instance-deploy-plan.md`） |

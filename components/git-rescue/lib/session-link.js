@@ -18,10 +18,14 @@ export const SM_API = {
   continue: '/api/session-manager/continue', // POST：续跑单会话 {sessionId}
 }
 
+/** 自身端口：优先 DSH_PORT，其次 TEST_DSH_PORT（测试实例脚本设的），兜底 3081。 */
+export function selfPort() {
+  return Number(process.env.DSH_PORT || process.env.TEST_DSH_PORT || 3081)
+}
+
 function dshBaseUrl() {
   const host = process.env.DSH_HOST || '127.0.0.1'
-  const port = process.env.DSH_PORT || 3081
-  return `http://${host}:${port}`
+  return `http://${host}:${selfPort()}`
 }
 
 /**

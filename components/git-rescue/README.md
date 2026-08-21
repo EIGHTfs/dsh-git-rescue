@@ -46,6 +46,13 @@
   - **现场捕获**（`lib/process-capture.js`）：guardian 启动 DSH 时 stderr/stdout 落盘 `git-rescue/dsh-stderr.log`（滚动 500KB）；救援时抓取退出现场（/proc 残留 + stderr 尾部 + journalctl/dmesg）→ 写入事件流，回答"谁发的 TERM / 为什么崩"
   - **sessions 基线+增量策略**：sessions/storages 移出常规增量 commit（zstd 二进制变化大），改为**定期全量基线**（默认每天，可配 `sessionsBaselineMs`；启动 5 分钟后首跑）——`git add -f` 强制入库 → 基线 commit → `git rm --cached` 恢复忽略；控制仓库体积增长
 
+- **v1.7.0 功能七：救援积分（rescue scores，防刷分）**
+  - **记录成功救援次数**：guardian 救援成功 + 插件回退成功（crash/manual）+ 崩溃检出，按设备统计
+  - **防刷分设计**：积分**不以可写文件为权威**（文件可篡改刷分）——从插件自身的保存恢复记录留档（`events.jsonl` / `guardian-events.jsonl`）**实时加载计算**；DSH 启动后重新计算覆盖缓存快照
+  - **设备标识**：用设备稳定 ID（machine-id，区别于 git 私人备份库名）作文件名 `rescue-scores-<id12>.json`，未来可汇总多台设备做排行榜
+  - 积分结构：`{deviceId, hostname, total, byType:{crash,guardian,manual}, breakdown, history}`
+  - 展示：status API 的 `scores` 字段；工具 `git_rescue_status` 含积分行
+
 ## 已验证（2026-08-18，测试实例 3083）
 
 - 单元测试 19/19（含真实 GitHub 推送建仓/推两次/清理）
@@ -81,6 +88,7 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.7.0 | 功能7：救援积分（事件流权威防刷分，设备 ID 标识，未来排行榜） |
 | 1.6.0 | 功能6：异常感知增强——flapping 检测（无限重启识别+冷却）/ 业务就绪探活（假活识别）/ 现场捕获（stderr 落盘+TERM 追踪）/ sessions 基线+增量策略 |
 | 1.5.1 | 修复（严重）：接管式重启增加「超时后主动拉起」——手动启动的实例（如测试实例 dsh-test-instance.sh）kill 后无自动重拉，60s 未恢复则执行 DSH_START_CMD（默认测试实例脚本）主动拉起，再轮询 240s |
 | 1.5.0 | 功能5：会话恢复联动（session-manager 装了才调用 scan 续跑，没装跳过，不内置） |

@@ -7,7 +7,7 @@
 把 `.dsh` 用户目录（sessions 会话、settings、profiles 配置）与 `workspace` 纳入 git 版本管理，
 用 commit 历史做精细回退；harness 崩溃时自动回退到上一个好版本。远端备份**仅支持 GitHub token 方案**。
 
-**功能总览**（组件 C 当前 v1.6.0）：
+**功能总览**（组件 C 当前 v1.7.0）：
 
 | 功能 | 版本 | 一句话 |
 |------|------|--------|
@@ -17,6 +17,7 @@
 | **接管式重启** | v1.4.0 | **独立脚本接管 DSH 重启**：TERM→轮询恢复→验证→留痕，会话中断也能安全完成（配套 skill `docs/skill-dsh-restart-takeover.md`） |
 | **会话恢复联动** | v1.5.0 | **与 dsh-session-manager 协同**：崩溃后调用其 scan 自动续跑中断会话；装了才调用、没装跳过、不内置 |
 | **异常感知增强** | v1.6.0 | **flapping 检测**（无限重启识别+冷却）/ **业务就绪探活**（假活识别）/ **现场捕获**（stderr 落盘+TERM 来源追踪）/ **sessions 基线+增量**（控制仓库体积） |
+| **救援积分** | v1.7.0 | **成功救援次数**（guardian/回退/崩溃检出），事件流权威防刷分，设备 ID 标识，未来排行榜 |
 
 ![体系架构](docs/screenshots/architecture.svg)
 
@@ -285,14 +286,14 @@ DeepSeek Harness 改配置、装插件、跑长任务都是家常便饭，风险
 
 ## ✅ 三合一合并（已完成）
 
-**结果**：三个原独立仓库（`dsh-snapshot-archive` / `dsh-guardian` / `dsh-snapshot-guardian`）已并入本仓库并从 GitHub 删除（2026-08-18，用户确认）。
+**结果**：三个原独立仓库（`dsh-snapshot-archive` / `dsh-guardian` / `dsh-snapshot-guardian`）已并入本仓库并从 GitHub 删除。
 
 | 合并来源 | 归入位置 | 状态 |
 |----------|----------|------|
 | zip 快照归档 | `components/snapshot-archive/`（组件 A） | ✅ 已合并 |
 | 守护进程 | `components/guardian/`（组件 B） | ✅ 已合并 |
 | git 版本管理+救援 | `components/git-rescue/`（组件 C） | ✅ v1.2.0 已开发完成 |
-| 整合版（A+B） | 不纳入（用户指定），已删分支与仓库 | ✅ 已删除 |
+| 整合版（A+B） | 不纳入，已删分支与仓库 | ✅ 已删除 |
 
 **三组件协同关系**：
 

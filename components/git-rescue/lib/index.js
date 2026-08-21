@@ -21,6 +21,7 @@ import {
 } from './git.js'
 import { verifyToken, pushSnapshot } from './github.js'
 import { getDeviceId, defaultBackupRepo } from './device.js'
+import { computeScoresFromEvents, refreshScoreSnapshot, scoreFileName } from './scores.js'
 import { AUTO_UPDATE_ENABLED, UPDATE_INTERVAL_MS, checkForUpdate, applyUpdate } from './self-update.js'
 import { linkSessionRecovery } from './session-link.js'
 
@@ -207,6 +208,7 @@ async function collectStatus() {
     git: { version: await gitVersion(), httpsHelperMissing: await httpsHelperMissing() },
     hostname: hostname(),
     device: { id: device.id, source: device.source, defaultBackupRepo: await defaultBackupRepo(STATE_ROOT) },
+    scores: await computeScoresFromEvents(STATE_ROOT, device.id, device.source),
     repos: {
       dsh: { root: DSH_ROOT, repo: await isRepo(DSH_ROOT), head: dshHead, changed: dshStatus.changed },
       workspace: ws ? { root: ws, repo: await isRepo(ws), head: await headRef(ws), changed: (await status(ws)).changed } : null,
@@ -265,7 +267,7 @@ async function detectCrashOnStartup() {
 // ---------- 回退 ----------
 
 /** 回退某个仓库到指定 ref：先 commit 现场 + 打 bad 标记，再 reset --hard。 */
-async function rollbackRepo(dir, ref, which) {
+async function rollbackRepo(dir, ref, which, scoreType = 'crash') {
   // 1) 先 commit 坏现场（生成的提交 = 坏提交，事后可分析）
   await commit(dir, `chore(guard): pre-rollback backup | ${which} @ ${await headRef(dir) ?? 'no-head'}`)
   // 2) 给【坏提交】（刚生成的 HEAD）打 bad 标记，而不是给目标 ref 打
@@ -274,17 +276,18 @@ async function rollbackRepo(dir, ref, which) {
   // 3) 回退
   const r = await hardReset(dir, ref)
   if (!r.ok) return r
-  await appendEvent('rollback', { repo: which, from: brokenHead, to: ref })
+  // 4) 救援积分（防刷分：不写可篡改计分文件，靠本事件留档，启动时从事件流实时计算）
+  await appendEvent('rollback', { repo: which, from: brokenHead, to: ref, scoreType })
   return { ok: true, from: brokenHead, to: ref }
 }
 
 /** 自动回退到最后一个好提交（guardian 调用，或手动 API 触发）。 */
-async function autoRollback(which = 'dsh') {
+async function autoRollback(which = 'dsh', scoreType = 'crash') {
   const dir = which === 'workspace' ? wsRepoDir() : DSH_ROOT
   if (!dir) return { ok: false, error: 'workspace 未启用' }
   const good = await lastGoodCommit(dir)
   if (!good) return { ok: false, error: '没有可回退的好提交（仓库无提交或全部被标记 bad）' }
-  const res = await rollbackRepo(dir, good, which)
+  const res = await rollbackRepo(dir, good, which, scoreType)
   return { ...res, target: good }
 }
 
@@ -554,7 +557,7 @@ async function handleApi(req, res, url, method) {
 
   if (method === 'POST' && path === '/api/git-rescue/rollback') {
     const body = await readJson(req)
-    const r = await autoRollback(body?.repo || 'dsh')
+    const r = await autoRollback(body?.repo || 'dsh', 'manual')
     return r.ok ? send(res, 200, r) : send(res, 400, r)
   }
 
@@ -682,7 +685,7 @@ export async function apply(ctx) {
       return lines.length ? lines.join('\n') : '暂无提交'
     }, { type: 'object', properties: { n: { type: 'integer', description: '查看最近 N 条提交记录，默认 10' } } }))
     tools.register(defineToolSimple('git_rescue_rollback', '回退到最后一个好提交（当前坏状态先备份+标记 bad）', async () => {
-      const r = await autoRollback('dsh')
+      const r = await autoRollback('dsh', 'manual')
       return r.ok ? `已回退 ${r.from || '?'} → ${r.to}` : `回退失败: ${r.error}`
     }))
     tools.register(defineToolSimple('git_rescue_push', '推送当前快照到 GitHub 备份仓库（token 方案）', async () => {
@@ -721,6 +724,12 @@ export async function apply(ctx) {
   } catch { /* 非仓库/不可写则跳过 */ }
   startTimers()
   await appendEvent('startup', { pid: process.pid })
+
+  // 救援积分：DSH 启动后从事件流实时计算并缓存快照（防刷分——权威是事件流，不是可写文件）
+  try {
+    const device = await getDeviceId(STATE_ROOT)
+    await refreshScoreSnapshot(STATE_ROOT, device.id, device.source)
+  } catch { /* 积分计算失败不影响启动 */ }
 
   // 自动更新：启动后 30s 首次检查（不阻塞启动；失败不影响主流程）
   if (AUTO_UPDATE_ENABLED) {

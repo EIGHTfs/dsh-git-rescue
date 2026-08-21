@@ -10,6 +10,10 @@
 import assert from 'node:assert/strict'
 import { createFlappingDetector, DEFAULT_OPTIONS } from './lib/flapping.js'
 import { probeDshHealth } from './lib/probe.js'
+import { promises as fsp } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join as joinPath } from 'node:path'
+import { computeScoresFromEvents, refreshScoreSnapshot } from './lib/scores.js'
 
 let pass = 0
 let fail = 0
@@ -56,26 +60,43 @@ function makeFetch(routes) {
   }
 }
 
-// healthy：根 + api + tools 全 200
-let h = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/status': { status: 200 }, '/api/tools': { status: 200 } }), '127.0.0.1', 3081)
-ok('全通 → healthy', h.level === 'healthy', h.level)
+// healthy：根 + api 通（tools 默认关闭）
+let h = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/git-rescue/status': { status: 200 } }), '127.0.0.1', 3081)
+ok('根+插件status通 → healthy（tools 默认关）', h.level === 'healthy', h.level)
 
-// degraded：根 200 但 API 404（假活）
-let deg = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/status': { status: 404 } }), '127.0.0.1', 3081)
-ok('根通 API 404 → degraded（假活识别）', deg.level === 'degraded', deg.level)
+// degraded：根 200 但插件 API 404（假活）
+let deg = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/git-rescue/status': { status: 404 } }), '127.0.0.1', 3081)
+ok('根通 插件API 404 → degraded（假活识别）', deg.level === 'degraded', deg.level)
 
-// degraded：API 200 但 tools 404
-let deg2 = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/status': { status: 200 }, '/api/tools': { status: 404 } }), '127.0.0.1', 3081)
-ok('tools 404 → degraded', deg2.level === 'degraded', deg2.level)
+// 显式开启 tools 探测时：tools 404 → degraded
+let deg2 = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/git-rescue/status': { status: 200 }, '/api/tools': { status: 404 } }), '127.0.0.1', 3081, { toolsPath: '/api/tools' })
+ok('显式开启 tools 且 404 → degraded', deg2.level === 'degraded', deg2.level)
 
 // down：根都不通（fetch throw）
 let down = await probeDshHealth(async () => { throw new Error('conn refused') }, '127.0.0.1', 3081)
 ok('连接失败 → down', down.level === 'down', down.level)
 
-// 可禁用 tools 探测
-let noTools = await probeDshHealth(makeFetch({ '/': { status: 200 }, '/api/status': { status: 200 } }), '127.0.0.1', 3081, { toolsPath: null })
-ok('toolsPath=null 跳过 tools → healthy', noTools.level === 'healthy', noTools.level)
-
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 if (fail > 0) { console.log('失败项: ' + failures.join(', ')); process.exit(1) }
 console.log('全部通过 ✅')
+
+// ============ T17: 救援积分（事件流权威，防刷分） ============
+console.log('== T17: 救援积分（事件流权威，防刷分） ==')
+
+const sdir = await fsp.mkdtemp(joinPath(tmpdir(), 'scores-test-'))
+await fsp.writeFile(joinPath(sdir, 'events.jsonl'), [
+  JSON.stringify({ ts: 1000, type: 'crash-detected', lastHeartbeatAgeMs: 120000 }),
+  JSON.stringify({ ts: 2000, type: 'rollback', repo: 'dsh', from: 'aaa', to: 'bbb', scoreType: 'crash' }),
+  JSON.stringify({ ts: 3000, type: 'rollback', repo: 'dsh', from: 'ccc', to: 'ddd', scoreType: 'manual' }),
+].join('\n'))
+await fsp.writeFile(joinPath(sdir, 'guardian-events.jsonl'), JSON.stringify({ time: '2026-08-18T00:00:00Z', level: 'info', msg: '✅ 救援成功：回退到 xyz 后 DSH 恢复正常' }))
+const sc = await computeScoresFromEvents(sdir, 'devtest')
+ok('积分 total=4', sc.total === 4, `total=${sc.total}`)
+ok('积分分类 crash:2/guardian:1/manual:1', sc.byType.crash === 2 && sc.byType.guardian === 1 && sc.byType.manual === 1, JSON.stringify(sc.byType))
+// 防刷分：篡改快照文件不影响计算结果
+await fsp.writeFile(joinPath(sdir, 'rescue-scores-devtest.json'), JSON.stringify({ total: 999, byType: { crash: 999 } }))
+const sc2 = await computeScoresFromEvents(sdir, 'devtest')
+ok('篡改快照后积分不变（防刷分）', sc2.total === 4, `total=${sc2.total}`)
+const snap = await refreshScoreSnapshot(sdir, 'devtest')
+ok('快照刷新覆盖篡改（重新计算）', snap.ok && snap.scores.total === 4, `snap.total=${snap.scores.total}`)
+await fsp.rm(sdir, { recursive: true, force: true })

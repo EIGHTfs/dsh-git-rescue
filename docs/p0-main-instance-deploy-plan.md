@@ -42,7 +42,7 @@
        - id: git-rescue
          name: 'dsh-git-rescue'
    ```
-4. **重启主实例**：`kill 184706`（runner）→ s6 自动重拉 → 插件加载。⚠️ 会中断当前所有会话（含本会话），需用户择时。
+4. **重启主实例**：`kill 184706`（runner）→ s6 自动重拉 → 插件加载。⚠️ 会中断当前所有会话。
 5. **验证**：
    - `curl http://127.0.0.1:3081/api/git-rescue/status` → ok:true；
    - `.dsh/git-rescue/heartbeat` 心跳开始写入；
@@ -79,7 +79,7 @@
 4. guardian 探活 3081，kill dsh web → 3×10s 检出 → git 回退 → s6 拉起 → 自检通过；
 5. 事件流 `events.jsonl` 记录本次所有异常（补上"异常无痕"盲区）。
 
-## 五、待用户确认事项
+## 五、待确认事项
 
 1. 部署时机（重启主实例会断当前会话）；
 2. 插件放置方式：真实目录 vs node_modules_local 软链（软链利于后续热更新）；

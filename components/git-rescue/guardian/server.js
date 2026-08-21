@@ -20,7 +20,7 @@ import http from 'node:http'
 import { runGit, commit, headRef, markBad, lastGoodCommit, hardReset } from '../lib/git.js'
 import { createFlappingDetector } from '../lib/flapping.js'
 import { probeDshHealth } from '../lib/probe.js'
-import { startDshWithLog, captureExitContext } from '../lib/process-capture.js'
+import { startDshWithLog, captureExitContext, readLogTail } from '../lib/process-capture.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -37,8 +37,9 @@ const CFG = {
   flappingWindowMs: Number(process.env.GUARDIAN_FLAPPING_WINDOW_MS || 10 * 60 * 1000),
   flappingMaxRestarts: Number(process.env.GUARDIAN_FLAPPING_MAX_RESTARTS || 3),
   // 业务就绪探活（v1.6.0）：根通但 API 未就绪（假活）也算失败
-  probeApiPath: process.env.GUARDIAN_PROBE_API_PATH || '/api/status',
-  probeToolsPath: process.env.GUARDIAN_PROBE_TOOLS_PATH || '/api/tools',
+  probeApiPath: process.env.GUARDIAN_PROBE_API_PATH || '/api/git-rescue/status',
+  // tools 枚举探测默认关闭（DSH 无标准 /api/tools；显式配置才启用）
+  probeToolsPath: process.env.GUARDIAN_PROBE_TOOLS_PATH || null,
 }
 
 const LOG_FILE = join(CFG.dshHome, 'git-rescue', 'guardian-dsh.log')
