@@ -21,6 +21,7 @@ import { runGit, commit, headRef, markBad, lastGoodCommit, hardReset } from '../
 import { createFlappingDetector } from '../lib/flapping.js'
 import { probeDshHealth } from '../lib/probe.js'
 import { startDshWithLog, captureExitContext, readLogTail } from '../lib/process-capture.js'
+import { classifyFault, probeSystemHints } from '../lib/fault-classify.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -133,6 +134,68 @@ async function git(dir, args) {
   return runGit(args, { cwd: dir })
 }
 
+/** 探测命令执行器（mount/dmesg），供 probeSystemHints 使用。 */
+async function execProbe(cmdArgs) {
+  const { execFile } = await import('node:child_process')
+  const [bin, ...args] = cmdArgs
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: 3000 }, (err, stdout) => {
+      if (err) { resolve(''); return }
+      resolve(String(stdout ?? ''))
+    })
+  })
+}
+
+/** 插件配置是否有未提交变更（有 = 疑似装/改插件 → 可回退）。 */
+async function pluginConfigChangedFlag() {
+  const files = ['profiles/web/cordis.patch.yml', 'profiles/web/package.json', 'profiles/web/cordis.yml']
+  try {
+    const r = await git(CFG.dshHome, ['status', '--porcelain'])
+    const out = r.stdout ?? ''
+    return files.some((f) => out.includes(f) || out.includes(f.split('/').pop()))
+  } catch { return false }
+}
+
+/**
+ * v1.8.0：系统故障自动修复（可选，依赖 sudo-key）。
+ * 读 ~/.dsh/git-rescue/sudo-key（600 权限，插件侧配置，绝不明文显示）→ 尝试 remount rw。
+ * @returns {{ok:boolean, sudoKeyMissing?:boolean, detail?:string, error?:string}}
+ */
+async function trySystemFixWithSudo() {
+  // 读 sudo-key（与插件共享状态目录）
+  const keyFile = join(CFG.dshHome, 'git-rescue', 'sudo-key')
+  let key = ''
+  try { key = (await fs.readFile(keyFile, 'utf8')).trim() } catch { /* 未配置 */ }
+  if (!key) return { ok: false, sudoKeyMissing: true, detail: '未配置 sudo-key' }
+
+  // 尝试 remount /vol1 rw（或 /，看哪个 ro）
+  // 注：-s 忽略未知挂载选项（fnOS ZFS 的 trimacl 等专有选项，无 -s 会报 invalid option）
+  try {
+    const { execFile } = await import('node:child_process')
+    const targets = ['/vol1', '/']
+    for (const t of targets) {
+      const out = await new Promise((resolve) => {
+        const child = execFile('sudo', ['-S', '-p', '', 'mount', '-s', '-o', 'remount,rw', t], {
+          timeout: 8000,
+          env: { ...process.env },
+        }, (err, stdout, stderr) => {
+          if (err) resolve({ ok: false, stderr: String(stderr ?? '') })
+          else resolve({ ok: true })
+        })
+        child.stdin.write(key + '\n')
+        child.stdin.end()
+      })
+      if (out.ok) {
+        return { ok: true, detail: `已 remount rw ${t}` }
+      }
+      // 目标不是 ro 时忽略该目标错误，继续下一个
+    }
+    return { ok: false, error: 'remount 尝试全部失败（可能卷健康/无 I-O 错误，或密码错误）' }
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) }
+  }
+}
+
 /** 救援流程：保留现场 → 标记坏点 → 回退 → 重启 → 健康检查。 */
 async function recover() {
   if (state.manualBusy) return { ok: false, error: 'busy' }
@@ -149,6 +212,18 @@ async function recover() {
       log('warn', `退出现场:\n${ctx}`)
       fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'exit-context', msg: ctx }) + '\n').catch(() => {})
     }
+
+    // 0.5) 插件安装事故识别（AGNES-LESSON 教训，v1.7.1）：启动失败可能是刚装的插件导致
+    //     （client 导出错误 / 依赖残留 → DSH 起不来）。回退将恢复事故前的插件配置
+    //     （cordis.patch.yml / package.json / node_modules 均在 .dsh 仓库跟踪内）。
+    const pluginFiles = ['profiles/web/cordis.patch.yml', 'profiles/web/package.json', 'profiles/web/cordis.yml']
+    try {
+      const changes = await git(CFG.dshHome, ['diff', '--name-only', 'HEAD'])
+      const hit = pluginFiles.filter((f) => changes.stdout?.includes(f) || changes.stdout?.includes(f.split('/').pop()))
+      if (hit.length) {
+        log('warn', `🚨 疑似插件安装事故：以下插件配置文件在本次崩溃前有变更——${hit.join(', ')}。回退将恢复这些文件到上次好提交，请人工确认是否刚装了/改了插件`)
+      }
+    } catch { /* 识别失败不影响救援 */ }
 
     // 1) 保留坏现场
     const pre = await commit(CFG.dshHome, 'chore(guard): crash-recovery | pre-rollback snapshot of broken state')
@@ -221,6 +296,39 @@ async function tick() {
   log('warn', `健康检查失败[${level}]（连续 ${state.failCount}/${CFG.failThreshold}）`)
   if (state.failCount >= CFG.failThreshold) {
     if (CFG.autoRecover) {
+      // ===== P0/P1 故障分类（v1.7.2）：先分清"能回退"与"不能回退"再决定救援方式 =====
+      // 系统盘只读 / 引导软链冲突 回退无意义，且会浪费重启次数（无限重启的根因之一）
+      const fault = await classifyFault({
+        systemHints: await probeSystemHints(execProbe),
+        bootHints: await readLogTail(STDERR_FILE, 40),
+        pluginConfigChanged: await pluginConfigChangedFlag(),
+      })
+      log('warn', `故障分类: [${fault.type}] ${fault.reason}`)
+      if (!fault.recoverable) {
+        // 不可回退：不触发 git 回退重启（避免对只读卷做无意义救援）
+        // v1.8.0：若配置了 sudo-key（可选，绝不明文显示）→ 尝试自动修复系统故障（remount rw）
+        if (fault.type === 'system') {
+          const fixed = await trySystemFixWithSudo()
+          if (fixed.ok) {
+            log('warn', `✅ 系统故障已自动修复（${fixed.detail}）——继续正常探活`)
+            fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'system-fixed', msg: fixed.detail }) + '\n').catch(() => {})
+            state.failCount = 0
+            return // 不进入冷却，下一轮 tick 重新探活
+          }
+          if (fixed.sudoKeyMissing) {
+            log('error', `⛔ 系统故障（${fault.type}）且未配置 sudo-key——无法自动修复，请人工处理：${fault.reason}（可选：插件配置里填写 sudoKey 后自动修复）`)
+          } else {
+            log('error', `⛔ 系统故障自动修复失败：${fixed.error}——请人工处理：${fault.reason}`)
+          }
+        } else {
+          log('error', `⛔ 不可回退故障（${fault.type}）——停止自动救援，请人工处理：${fault.reason}`)
+        }
+        fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'unrecoverable', type: fault.type, msg: fault.reason }) + '\n').catch(() => {})
+        state.failCount = 0
+        state.flappingCooldownUntil = Date.now() + CFG.flappingWindowMs // 冷却，防反复无用救援
+        return
+      }
+      // 可回退：走正常 git 回退救援
       state.failCount = 0
       await recover()
       // flapping 检测：每次救援后记录一次"重启事件"；窗口内 ≥maxRestarts 次 → 升级处理

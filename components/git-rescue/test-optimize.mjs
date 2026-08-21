@@ -14,6 +14,7 @@ import { promises as fsp } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join as joinPath } from 'node:path'
 import { computeScoresFromEvents, refreshScoreSnapshot } from './lib/scores.js'
+import { classifyFault } from './lib/fault-classify.js'
 
 let pass = 0
 let fail = 0
@@ -100,3 +101,16 @@ ok('篡改快照后积分不变（防刷分）', sc2.total === 4, `total=${sc2.t
 const snap = await refreshScoreSnapshot(sdir, 'devtest')
 ok('快照刷新覆盖篡改（重新计算）', snap.ok && snap.scores.total === 4, `snap.total=${snap.scores.total}`)
 await fsp.rm(sdir, { recursive: true, force: true })
+
+// ============ T18: 故障分类（P0/P1：能回退 vs 不能回退） ============
+console.log('== T18: 故障分类（P0/P1） ==')
+const fSys = classifyFault({ systemHints: '/vol1 mount ro: zfs (ro) dmesg: Read-only file system' })
+ok('系统只读 → 不可回退', fSys.type === 'system' && fSys.recoverable === false, JSON.stringify(fSys))
+const fBoot = classifyFault({ bootHints: 'exists and is not a symlink' })
+ok('引导软链冲突 → 不可回退', fBoot.type === 'boot' && fBoot.recoverable === false, JSON.stringify(fBoot))
+const fPlug = classifyFault({ pluginConfigChanged: true })
+ok('插件配置变更 → 可回退', fPlug.type === 'plugin' && fPlug.recoverable === true, JSON.stringify(fPlug))
+const fUnk = classifyFault({})
+ok('未知 → 保守可回退', fUnk.type === 'unknown' && fUnk.recoverable === true, JSON.stringify(fUnk))
+const fSysFirst = classifyFault({ systemHints: 'Read-only file system', bootHints: 'not a symlink', pluginConfigChanged: true })
+ok('系统故障优先于插件（不误回退）', fSysFirst.type === 'system' && fSysFirst.recoverable === false, JSON.stringify(fSysFirst))

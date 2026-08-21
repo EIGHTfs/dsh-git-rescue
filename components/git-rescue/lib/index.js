@@ -34,6 +34,7 @@ const DSH_ROOT = process.env.DSH_HOME || join(HOME, '.dsh')
 const STATE_ROOT = join(DSH_ROOT, 'git-rescue')
 const CONFIG_PATH = join(STATE_ROOT, 'config.json')
 const TOKEN_PATH = join(STATE_ROOT, 'token')
+const SUDO_KEY_PATH = join(STATE_ROOT, 'sudo-key') // v1.8.0：可选 sudo 密码（600 权限，单独文件，绝不明文显示）
 const HEARTBEAT_PATH = join(STATE_ROOT, 'heartbeat')
 const EVENTS_PATH = join(STATE_ROOT, 'events.jsonl')
 
@@ -105,6 +106,22 @@ async function readToken() {
 async function writeToken(token) {
   await fs.mkdir(STATE_ROOT, { recursive: true })
   await fs.writeFile(TOKEN_PATH, String(token).trim(), { mode: 0o600 })
+}
+
+// ---------- sudo-key（v1.8.0：可选，用于系统故障自动修复/开机自启） ----------
+// 安全：单独文件 600 权限；API 回显只报"是否已设置"，绝不显示密码本身（明文/脱敏都不显示）
+
+async function readSudoKey() {
+  try { return (await fs.readFile(SUDO_KEY_PATH, 'utf8')).trim() } catch { return '' }
+}
+
+async function writeSudoKey(key) {
+  await fs.mkdir(STATE_ROOT, { recursive: true })
+  await fs.writeFile(SUDO_KEY_PATH, String(key).trim(), { mode: 0o600 })
+}
+
+async function clearSudoKey() {
+  await fs.rm(SUDO_KEY_PATH, { force: true }).catch(() => {})
 }
 
 function maskToken(t) { return t ? `${t.slice(0, 4)}…${t.slice(-4)}` : '' }
@@ -528,7 +545,8 @@ async function handleApi(req, res, url, method) {
 
   if (method === 'GET' && path === '/api/git-rescue/config') {
     const t = await readToken()
-    return send(res, 200, { ok: true, config: { ...cfg, githubTokenSet: !!t, githubToken: maskToken(t) } })
+    const sk = await readSudoKey()
+    return send(res, 200, { ok: true, config: { ...cfg, githubTokenSet: !!t, githubToken: maskToken(t), sudoKeySet: !!sk } })
   }
 
   if (method === 'POST' && path === '/api/git-rescue/config') {
@@ -539,6 +557,16 @@ async function handleApi(req, res, url, method) {
     if (body.githubToken) {
       await writeToken(body.githubToken)
       await appendEvent('config-update', { githubToken: true })
+    }
+    // sudo-key（v1.8.0）：可设置或清除（传 sudoKey='' 或 'clear' 清除）；不写入 config.json，单独 600 文件
+    if (body.sudoKey !== undefined) {
+      if (body.sudoKey === '' || body.sudoKey === 'clear') {
+        await clearSudoKey()
+        await appendEvent('config-update', { sudoKey: false })
+      } else {
+        await writeSudoKey(body.sudoKey)
+        await appendEvent('config-update', { sudoKey: true })
+      }
     }
     await saveConfig()
     startTimers()

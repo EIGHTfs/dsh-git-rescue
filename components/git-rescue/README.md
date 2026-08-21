@@ -53,6 +53,13 @@
   - 积分结构：`{deviceId, hostname, total, byType:{crash,guardian,manual}, breakdown, history}`
   - 展示：status API 的 `scores` 字段；工具 `git_rescue_status` 含积分行
 
+- **v1.7.2 故障分类（P0/P1）**：guardian 探活失败时先分类——`lib/fault-classify.js` 判定 system（/vol1 只读/dmesg I-O 错误）/ boot（软链冲突）/ plugin（插件配置变更）/ unknown；**系统与引导故障不可回退**（停止自动救援+冷却+告警人工，不再对只读卷做无意义回退重启），插件故障才走 git 回退
+
+- **v1.8.0 可选 sudo-key（无 root 部署友好）**：
+  - 插件配置可填写 sudo-key（**绝不明文显示/存储**：GET config 只报 `sudoKeySet`，单独文件 600 权限，不进 config.json/不进 git）
+  - guardian 判定 system 故障时，若配置了 sudo-key → **自动 `sudo mount -s -o remount,rw` 修复只读卷**（含 -s 忽略 fnOS trimacl 等专有选项）→ 修复后继续探活
+  - **无 root / 不配置 sudo-key**：保持"告警人工"（P0 设计不变），插件核心功能（git 管理/回退/积分/探活）完全不需要 root
+
 ## 已验证（2026-08-18，测试实例 3083）
 
 - 单元测试 19/19（含真实 GitHub 推送建仓/推两次/清理）
@@ -88,6 +95,9 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.8.0 | 功能8：可选 sudo-key（插件配置，绝不明文显示/存储）——系统故障时 guardian 自动 remount rw 修复；无 root 环境不配置则保持"告警人工" |
+| 1.7.2 | 修复（严重/P0）：guardian 故障分类——系统只读/引导软链冲突判定为不可回退（停止无意义回退重启，防无限重启），仅插件配置变更才走 git 回退 |
+| 1.7.1 | 修复：guardian 插件安装事故识别（救援时 diff 插件配置，标注疑似装插件崩溃）+ 开机自启脚本 |
 | 1.7.0 | 功能7：救援积分（事件流权威防刷分，设备 ID 标识，未来排行榜） |
 | 1.6.0 | 功能6：异常感知增强——flapping 检测（无限重启识别+冷却）/ 业务就绪探活（假活识别）/ 现场捕获（stderr 落盘+TERM 追踪）/ sessions 基线+增量策略 |
 | 1.5.1 | 修复（严重）：接管式重启增加「超时后主动拉起」——手动启动的实例（如测试实例 dsh-test-instance.sh）kill 后无自动重拉，60s 未恢复则执行 DSH_START_CMD（默认测试实例脚本）主动拉起，再轮询 240s |
