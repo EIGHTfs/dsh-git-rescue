@@ -23,6 +23,7 @@ import { verifyToken, pushSnapshot } from './github.js'
 import { getDeviceId, defaultBackupRepo } from './device.js'
 import { computeScoresFromEvents, refreshScoreSnapshot, scoreFileName } from './scores.js'
 import { AUTO_UPDATE_ENABLED, UPDATE_INTERVAL_MS, checkForUpdate, applyUpdate } from './self-update.js'
+import { registerTestEnvEntry } from './test-env-entry.js'
 import { linkSessionRecovery } from './session-link.js'
 
 export const name = 'dsh-git-rescue'
@@ -33,10 +34,27 @@ const HOME = process.env.USERPROFILE ?? process.env.HOME ?? homedir()
 const DSH_ROOT = process.env.DSH_HOME || join(HOME, '.dsh')
 const STATE_ROOT = join(DSH_ROOT, 'git-rescue')
 const CONFIG_PATH = join(STATE_ROOT, 'config.json')
-const TOKEN_PATH = join(STATE_ROOT, 'token')
-const SUDO_KEY_PATH = join(STATE_ROOT, 'sudo-key') // v1.8.0：可选 sudo 密码（600 权限，单独文件，绝不明文显示）
+// 凭据统一存放（2026-08-19 用户约定：data/sensitive/，见 credentials-locator skill）：
+// 优先读 data/sensitive，缺则回退旧路径 $DSH_HOME/git-rescue/（兼容未迁移/插件写入场景）
+const WORKSPACE = process.env.DSH_WORKSPACE || '/vol1/@appshare/DeepSeekHarness/workspace'
+const SENSITIVE_DIR = join(WORKSPACE, 'data', 'sensitive')
+const TOKEN_PATH_LEGACY = join(STATE_ROOT, 'token')
+const SUDO_KEY_PATH_LEGACY = join(STATE_ROOT, 'sudo-key') // v1.8.0：可选 sudo 密码（600 权限，单独文件，绝不明文显示）
 const HEARTBEAT_PATH = join(STATE_ROOT, 'heartbeat')
 const EVENTS_PATH = join(STATE_ROOT, 'events.jsonl')
+
+/** 凭据文件解析：data/sensitive 优先，旧路径回退。 */
+async function readCredential(name) {
+  const legacy = join(STATE_ROOT, name)
+  const sensitive = join(SENSITIVE_DIR, name)
+  for (const p of [sensitive, legacy]) {
+    try {
+      const t = (await fs.readFile(p, 'utf8')).trim()
+      if (t) return t
+    } catch { /* 继续尝试下一个 */ }
+  }
+  return ''
+}
 
 /** .dsh 仓库的 .gitignore（配置+skills 入库；sessions/storages 走基线+增量策略，敏感/大文件/缓存排除）。 */
 const DSH_GITIGNORE = [
@@ -100,28 +118,38 @@ async function saveConfig() {
 }
 
 async function readToken() {
-  try { return (await fs.readFile(TOKEN_PATH, 'utf8')).trim() } catch { return '' }
+  // data/sensitive/github-token（新约定）优先，旧路径 git-rescue/token 回退
+  try {
+    const t = (await fs.readFile(join(SENSITIVE_DIR, 'github-token'), 'utf8')).trim()
+    if (t) return t
+  } catch { /* 回退旧路径 */ }
+  try { return (await fs.readFile(TOKEN_PATH_LEGACY, 'utf8')).trim() } catch { return '' }
 }
 
 async function writeToken(token) {
   await fs.mkdir(STATE_ROOT, { recursive: true })
-  await fs.writeFile(TOKEN_PATH, String(token).trim(), { mode: 0o600 })
+  await fs.writeFile(TOKEN_PATH_LEGACY, String(token).trim(), { mode: 0o600 })
 }
 
 // ---------- sudo-key（v1.8.0：可选，用于系统故障自动修复/开机自启） ----------
 // 安全：单独文件 600 权限；API 回显只报"是否已设置"，绝不显示密码本身（明文/脱敏都不显示）
 
 async function readSudoKey() {
-  try { return (await fs.readFile(SUDO_KEY_PATH, 'utf8')).trim() } catch { return '' }
+  // data/sensitive/sudo-key（新约定）优先，旧路径 git-rescue/sudo-key 回退
+  try {
+    const k = (await fs.readFile(join(SENSITIVE_DIR, 'sudo-key'), 'utf8')).trim()
+    if (k) return k
+  } catch { /* 回退旧路径 */ }
+  try { return (await fs.readFile(SUDO_KEY_PATH_LEGACY, 'utf8')).trim() } catch { return '' }
 }
 
 async function writeSudoKey(key) {
   await fs.mkdir(STATE_ROOT, { recursive: true })
-  await fs.writeFile(SUDO_KEY_PATH, String(key).trim(), { mode: 0o600 })
+  await fs.writeFile(SUDO_KEY_PATH_LEGACY, String(key).trim(), { mode: 0o600 })
 }
 
 async function clearSudoKey() {
-  await fs.rm(SUDO_KEY_PATH, { force: true }).catch(() => {})
+  await fs.rm(SUDO_KEY_PATH_LEGACY, { force: true }).catch(() => {})
 }
 
 function maskToken(t) { return t ? `${t.slice(0, 4)}…${t.slice(-4)}` : '' }
@@ -661,6 +689,10 @@ function defineToolSimple(name, description, fn, params) {
 // ---------- 插件入口 ----------
 
 export async function apply(ctx) {
+  // 测试环境入口（整合自 dsh-test-env-entry，v1.9.0）：侧边栏面板 + /api/dsh-test-env/*
+  try { await registerTestEnvEntry(ctx, {}); }
+  catch (e) { console.log('[git-rescue] test-env-entry 挂载失败: ' + String(e?.message ?? e)); }
+
   await loadConfig()
 
   // webServer 注册走 ctx.inject（apply 运行时刻 webServer fiber 可能尚未创建）
@@ -766,4 +798,10 @@ export async function apply(ctx) {
 
   const gv = await gitVersion()
   console.log(`[git-rescue] 已启动: git=${gv || '不可用'}, dshRoot=${DSH_ROOT}, workspace=${wsRepoDir() || '未启用'}, autoUpdate=${AUTO_UPDATE_ENABLED ? 'ON(强制)' : 'OFF(env)'}`)
+
+  // 首次启动提示（v1.8.0）：sudo-key 完全可选，不填也完整可用；避免用户对 root 密码敏感
+  const sk = await readSudoKey().catch(() => '')
+  if (!sk) {
+    console.log(`[git-rescue] 🔓 sudo-key 未配置（完全可选，不强求）：核心功能无需 root；如需系统只读故障自动修复，可在插件配置填写 sudo-key（绝不明文存储）。敏感用户可忽略此提示。`)
+  }
 }

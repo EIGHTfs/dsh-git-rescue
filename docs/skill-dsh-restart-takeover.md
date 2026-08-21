@@ -10,6 +10,8 @@ whenToUse: 需要重启 DSH（装插件、改 cordis.patch.yml/package.json、�
 > 核心困境：DSH 重启会中断**所有会话**（含正在执行的 Agent 回合），任何「kill → 等恢复 → 继续验证」的同步流程都会在 kill 的瞬间断掉。
 > 解法：**把重启+验证交给独立后台进程（setsid + nohup）接管**，脚本自持完整流程，结果写日志文件，会话恢复后再读。
 
+> 📦 相关源码：guardian/server.js + guardian-boot.sh 在 `dsh-git-rescue` 仓库（地址见 **dsh-repo-index**）。
+
 ## 一、什么时候需要接管重启
 
 - 装插件 / 改 `cordis.patch.yml` / 改 profile `package.json` → 需重启 DSH 生效

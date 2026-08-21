@@ -56,9 +56,14 @@
 - **v1.7.2 故障分类（P0/P1）**：guardian 探活失败时先分类——`lib/fault-classify.js` 判定 system（/vol1 只读/dmesg I-O 错误）/ boot（软链冲突）/ plugin（插件配置变更）/ unknown；**系统与引导故障不可回退**（停止自动救援+冷却+告警人工，不再对只读卷做无意义回退重启），插件故障才走 git 回退
 
 - **v1.8.0 可选 sudo-key（无 root 部署友好）**：
-  - 插件配置可填写 sudo-key（**绝不明文显示/存储**：GET config 只报 `sudoKeySet`，单独文件 600 权限，不进 config.json/不进 git）
+
+  > 🔓 **完全可选，不强求！** 插件**核心功能（git 管理 / 回退 / 积分 / 探活）一行 root 密码都不用填**。
+  > sudo-key 只是给「愿意提供 root 密码的设备」加一个自动修复只读卷的便利；不填完全不影响使用，
+  > 系统故障时插件会安全地停下并提示人工处理，绝不擅自操作系统。
+
+  - 插件配置可填写 sudo-key（**绝不明文显示/存储**：GET config 只报 `sudoKeySet`，单独文件 600 权限，不进 config.json/不进 git；敏感用户完全可以跳过此项）
   - guardian 判定 system 故障时，若配置了 sudo-key → **自动 `sudo mount -s -o remount,rw` 修复只读卷**（含 -s 忽略 fnOS trimacl 等专有选项）→ 修复后继续探活
-  - **无 root / 不配置 sudo-key**：保持"告警人工"（P0 设计不变），插件核心功能（git 管理/回退/积分/探活）完全不需要 root
+  - **无 root / 不配置 sudo-key**：保持"告警人工"（P0 设计不变），插件核心功能完全不需要 root
 
 ## 已验证（2026-08-18，测试实例 3083）
 

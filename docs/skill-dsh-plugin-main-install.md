@@ -9,6 +9,8 @@ whenToUse: 需要把插件装到主实例（3081）、升级主环境插件版�
 > 经验来源：2026-08-18 主环境安装 dsh-git-rescue（1.2.2→1.5.1→1.6.0 多次）+ 测试实例验证全链路。
 > 核心原则：**测试实例先行（蓝绿）→ 主环境安装 → 接管式重启 → 验证清单**。安装到主环境是生产操作，每一步都要留痕可回退。
 
+> 📦 源码恢复：所有 dsh-* 插件源码位置见 **dsh-repo-index**（唯一权威索引，含公开/私有仓库地址与恢复命令）。
+
 ## 一、注册三要素（缺一不可）
 
 DSH 插件加载靠三处注册，**全部**配置好才生效：
@@ -62,6 +64,7 @@ node -e "const p=require('./node_modules/<pkg>/package.json'); console.log(p.ver
 | **重启后不验证** | 插件没加载不知道 | 重启脚本内轮询 + sleep 8~15s 再 curl 插件 API |
 | **测试实例配置被覆盖** | 清理的残留又回来 | dsh-test-sync 会同步官方 bundles 但不动 node_modules_local；确认无其他会话在改测试实例（ps 查 dsh-test-instance/cordis.patch 进程） |
 | **主实例 .dsh 只读误判** | 以为装不了 | 主实例进程视角 /vol1 是 rw（沙箱 ro 是 Agent 视角）；沙箱放开后可直接写 |
+| **无 root 环境** | 以为插件装不了/救不了 | 插件核心（git 管理/回退/积分/探活）零 root；开机自启用 crontab@reboot 或 systemd --user；系统故障自动修复可选 sudo-key（v1.8.0，配置里填，绝不明文，guardian 自动 remount rw）；不配置则保持告警人工 |
 
 ## 四、验证清单（重启后必查）
 

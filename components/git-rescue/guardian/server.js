@@ -162,10 +162,15 @@ async function pluginConfigChangedFlag() {
  * @returns {{ok:boolean, sudoKeyMissing?:boolean, detail?:string, error?:string}}
  */
 async function trySystemFixWithSudo() {
-  // 读 sudo-key（与插件共享状态目录）
-  const keyFile = join(CFG.dshHome, 'git-rescue', 'sudo-key')
+  // 读 sudo-key：data/sensitive（2026-08-19 用户约定）优先，旧路径 git-rescue/sudo-key 回退
+  const workspace = process.env.DSH_WORKSPACE || '/vol1/@appshare/DeepSeekHarness/workspace'
+  const sensitiveKey = join(workspace, 'data', 'sensitive', 'sudo-key')
+  const legacyKey = join(CFG.dshHome, 'git-rescue', 'sudo-key')
   let key = ''
-  try { key = (await fs.readFile(keyFile, 'utf8')).trim() } catch { /* 未配置 */ }
+  try { key = (await fs.readFile(sensitiveKey, 'utf8')).trim() } catch { /* 回退旧路径 */ }
+  if (!key) {
+    try { key = (await fs.readFile(legacyKey, 'utf8')).trim() } catch { /* 未配置 */ }
+  }
   if (!key) return { ok: false, sudoKeyMissing: true, detail: '未配置 sudo-key' }
 
   // 尝试 remount /vol1 rw（或 /，看哪个 ro）
