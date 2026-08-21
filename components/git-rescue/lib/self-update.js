@@ -6,12 +6,22 @@
  *   在最需要它的时候失灵。因此自动更新**默认强制开启**，不写入 config.json、
  *   不暴露设置 API；仅环境变量 DSH_GIT_RESCUE_AUTO_UPDATE=0 可关闭（调试/隔离用）。
  *
- * 更新源：EIGHTfs/dsh-git-rescue main 分支的 components/git-rescue/ 子树。
+ * 更新源：EIGHTfs/dsh-git-rescue main 分支。v1.13.0 为 components/git-rescue/ 子树；
+ * v2.0.0 起为根级单组件结构（lib/、guardian/ 直接在仓库根）。
  * 实现：GitHub Git Trees API（recursive）取文件清单 → raw.githubusercontent.com
  *       逐个下载 → 临时目录 → 语法校验（node --check）→ 原子替换 → 失败回滚。
  *
+ * 结构迁移升级（2026-08-21 用户要求：大版本数据结构改变时，旧版本自动更新必须
+ * 走【卸载旧版 → 安装新版】，不能直接覆盖）：
+ *   - 旧路径 components/git-rescue/package.json 404、但根级 package.json 存在
+ *     = 远端已升级到根级新结构 → structureMismatch=true → applyUpdate 走 applyMajorUpgrade
+ *   - applyMajorUpgrade：整目录备份 → 卸载旧版（清空安装目录）→ 按根级白名单完整拉取 → 原子替换 → 失败回滚
+ *   - 同大版本内数据结构严重不一致（main 指向缺失 / lib/index.js 缺失 / cordis.patch.yml 缺失）
+ *     也走卸载重装而非直接覆盖（代码级判断）
+ *
  * 安全：
- *  - 只允许 components/git-rescue/ 前缀下的文件（路径白名单，防树外写入）
+ *  - 只允许白名单前缀下的文件（lib/、guardian/、skills/、package.json、cordis.patch.yml、README.md、LICENSE，
+ *    旧版另兼容 components/git-rescue/ 前缀），防树外写入
  *  - 下载后先校验 package.json 版本号与 JS 语法，全部通过才替换
  *  - 替换前备份当前安装目录，替换失败自动回滚
  *  - 更新后当前进程仍是旧代码，需 DSH 重启生效（status 提示 pendingRestart）
@@ -31,9 +41,26 @@ export const UPDATE_SOURCE = {
   owner: 'EIGHTfs',
   repo: 'dsh-git-rescue',
   branch: 'main',
-  /** 仓库内插件子目录（只同步这一棵子树） */
+  /** 旧版子树（v1.13.0 及之前）；根级结构时为空。 */
   subdir: 'components/git-rescue',
 }
+
+/** 同步白名单（前缀匹配；安全边界，防树外写入）。v2.0.0 起根级结构，白名单含 lib/ 等根目录。 */
+export const SYNC_ALLOWLIST = [
+  'lib/',
+  'guardian/',
+  'skills/',
+  'tools/',
+  'docs/',
+  'package.json',
+  'cordis.patch.yml',
+  'README.md',
+  'README-2.0.0-only.md',
+  'LICENSE',
+]
+
+/** 旧版子树前缀（兼容：远端还是旧结构时按子树同步）。 */
+export const LEGACY_SUBDIR = 'components/git-rescue'
 
 export const UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000 // 每 24 小时（每天一次）定时检查；另在每次 DSH 启动成功后 30s 检查一次
 
@@ -58,6 +85,12 @@ export function compareVersions(a, b) {
     if (va !== vb) return va > vb ? 1 : -1
   }
   return 0
+}
+
+/** 路径是否在同步白名单内（安全前缀匹配）。 */
+export function isAllowedPath(rel) {
+  if (!rel || rel.includes('..') || rel.startsWith('/') || rel.startsWith('\\')) return false
+  return SYNC_ALLOWLIST.some((prefix) => rel === prefix || rel.startsWith(prefix))
 }
 
 /** 解析 GitHub API 响应（复用重试模式）。 */
@@ -86,12 +119,18 @@ async function apiGet(token, path) {
   return { ok: false, error: `重试 3 次仍失败: ${lastErr}` }
 }
 
-/** 拉取远端文件原文（raw）。 */
+/** 拉取远端文件原文（raw）。旧路径 404 时回退根级路径。 */
 async function fetchRaw(token, relPath) {
-  const url = `${RAW}/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/${UPDATE_SOURCE.branch}/${UPDATE_SOURCE.subdir}/${relPath}`
+  // 根级路径
+  const urlRoot = `${RAW}/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/${UPDATE_SOURCE.branch}/${relPath}`
   const headers = { 'User-Agent': 'dsh-git-rescue-self-update' }
   if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(url, { headers })
+  let res = await fetch(urlRoot, { headers })
+  // 旧子树路径回退
+  if (!res.ok) {
+    const urlLegacy = `${RAW}/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/${UPDATE_SOURCE.branch}/${LEGACY_SUBDIR}/${relPath}`
+    res = await fetch(urlLegacy, { headers })
+  }
   if (!res.ok) throw new Error(`raw 下载失败 HTTP ${res.status}: ${relPath}`)
   return Buffer.from(await res.arrayBuffer())
 }
@@ -100,7 +139,9 @@ async function fetchRaw(token, relPath) {
 
 /**
  * 检查远端是否有新版本。
- * @returns {Promise<{ok:boolean, installedVersion:string, remoteVersion:string, updateAvailable:boolean, detail?:string}>}
+ * 2026-08-21 结构迁移检测：先查旧路径 components/git-rescue/package.json，404 时
+ * 探测根级 package.json（v2.0.0+ 结构）——存在即远端已升级结构 → structureMismatch=true。
+ * @returns {Promise<{ok:boolean, installedVersion:string, remoteVersion:string, updateAvailable:boolean, structureMismatch?:boolean, majorUpgrade?:boolean, detail?:string}>}
  */
 export async function checkForUpdate(token = '') {
   const root = installRoot()
@@ -110,44 +151,74 @@ export async function checkForUpdate(token = '') {
     installedVersion = pkg.version || '0.0.0'
   } catch { /* 读取本地版本失败则视为 0.0.0 */ }
 
-  const r = await apiGet(token, `/repos/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/contents/${UPDATE_SOURCE.subdir}/package.json?ref=${UPDATE_SOURCE.branch}`)
-  if (!r.ok) return { ok: false, installedVersion, remoteVersion: null, updateAvailable: false, detail: `远端版本读取失败: ${r.error}` }
-
-  let remoteVersion = '0.0.0'
-  try {
-    const content = Buffer.from(r.data.content, 'base64').toString('utf8')
-    remoteVersion = JSON.parse(content).version || '0.0.0'
-  } catch {
-    return { ok: false, installedVersion, remoteVersion: null, updateAvailable: false, detail: '远端 package.json 解析失败' }
+  // 1) 旧路径（components/git-rescue/package.json）
+  const legacy = await apiGet(token, `/repos/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/contents/${LEGACY_SUBDIR}/package.json?ref=${UPDATE_SOURCE.branch}`)
+  if (legacy.ok) {
+    let remoteVersion = '0.0.0'
+    try {
+      remoteVersion = JSON.parse(Buffer.from(legacy.data.content, 'base64').toString('utf8')).version || '0.0.0'
+    } catch {
+      return { ok: false, installedVersion, remoteVersion: null, updateAvailable: false, detail: '远端 package.json 解析失败' }
+    }
+    return {
+      ok: true,
+      installedVersion,
+      remoteVersion,
+      updateAvailable: compareVersions(remoteVersion, installedVersion) > 0,
+      structureMismatch: false,
+      majorUpgrade: false,
+      detail: compareVersions(remoteVersion, installedVersion) > 0 ? `可更新 ${installedVersion} → ${remoteVersion}` : `已是最新 (${installedVersion})`,
+    }
   }
 
-  return {
-    ok: true,
-    installedVersion,
-    remoteVersion,
-    updateAvailable: compareVersions(remoteVersion, installedVersion) > 0,
-    detail: compareVersions(remoteVersion, installedVersion) > 0 ? `可更新 ${installedVersion} → ${remoteVersion}` : `已是最新 (${installedVersion})`,
+  // 2) 旧路径 404 → 探测根级 package.json（v2.0.0+ 根级结构）
+  const rootPkg = await apiGet(token, `/repos/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/contents/package.json?ref=${UPDATE_SOURCE.branch}`)
+  if (rootPkg.ok) {
+    let remoteVersion = '0.0.0'
+    try {
+      remoteVersion = JSON.parse(Buffer.from(rootPkg.data.content, 'base64').toString('utf8')).version || '0.0.0'
+    } catch {
+      return { ok: false, installedVersion, remoteVersion: null, updateAvailable: false, detail: '远端根级 package.json 解析失败' }
+    }
+    // 结构已变（components/git-rescue 子树消失，根级出现）= 大版本换代：旧版必须卸载重装到新版
+    const newer = compareVersions(remoteVersion, installedVersion) > 0
+    return {
+      ok: true,
+      installedVersion,
+      remoteVersion,
+      updateAvailable: true, // 结构不同必须升级（即使版本号不更高也需迁移）
+      structureMismatch: true,
+      majorUpgrade: true,
+      detail: `大版本换代：远端已升级到根级结构 v${remoteVersion}（本机 v${installedVersion} 旧子树结构），走卸载重装升级`,
+    }
   }
+
+  return { ok: false, installedVersion, remoteVersion: null, updateAvailable: false, detail: '远端版本读取失败（新旧路径均不可用）' }
 }
 
 // ---------- 文件清单 ----------
 
-/** 远端 components/git-rescue/ 子树文件清单（Git Trees API recursive）。 */
+/** 远端文件清单（Git Trees API recursive）。根级白名单优先，旧子树前缀回退。 */
 async function fetchFileList(token) {
   const r = await apiGet(token, `/repos/${UPDATE_SOURCE.owner}/${UPDATE_SOURCE.repo}/git/trees/${UPDATE_SOURCE.branch}?recursive=1`)
   if (!r.ok) throw new Error(`tree 获取失败: ${r.error}`)
-  const prefix = `${UPDATE_SOURCE.subdir}/`
+  const prefix = `${LEGACY_SUBDIR}/`
   const files = []
   for (const item of r.data?.tree ?? []) {
     if (item.type !== 'blob') continue
-    if (!item.path.startsWith(prefix)) continue
-    const rel = item.path.slice(prefix.length)
-    if (!rel) continue
-    // 安全白名单：排除一切含 .. 或绝对路径的条目
-    if (rel.includes('..') || rel.startsWith('/') || rel.startsWith('\\')) continue
-    files.push(rel)
+    let rel = item.path
+    // 根级白名单优先
+    if (isAllowedPath(rel)) { files.push(rel); continue }
+    // 旧子树路径：剥掉 components/git-rescue/ 前缀
+    if (rel.startsWith(prefix)) {
+      const sub = rel.slice(prefix.length)
+      if (sub && !sub.includes('..') && !sub.startsWith('/') && !sub.startsWith('\\')) {
+        files.push(sub)
+      }
+    }
   }
-  return files
+  // 去重（同 rel 只保留一次）
+  return [...new Set(files)]
 }
 
 /** 执行 node --check 语法校验。 */
@@ -177,6 +248,13 @@ export async function applyUpdate(token = '') {
     // 0) 远端版本
     const check = await checkForUpdate(token)
     if (!check.ok) return { ok: false, updated: false, error: check.detail || '版本检查失败' }
+
+    // 0.5) 大版本换代（结构迁移，2026-08-21 用户要求）：
+    //      远端已升级到根级新结构（旧路径 components/git-rescue 消失）→ 不能"逐项覆盖"升级
+    //      （新旧结构文件布局不同，覆盖会残留旧文件）→ 【卸载旧版 → 安装新版】整目录重建
+    if (check.structureMismatch) {
+      return await applyMajorUpgrade(token, check, { root, stateDir, tmpDir, bakDir })
+    }
     if (!check.updateAvailable) return { ok: true, updated: false, from: check.installedVersion, to: check.remoteVersion, error: null }
 
     // 1) 下载全部文件到临时目录
@@ -243,5 +321,64 @@ export async function applyUpdate(token = '') {
       }
     } catch (rb) { /* 回滚失败也要报告原始错误 */ }
     return { ok: false, updated: false, error: errMsg }
+  }
+}
+
+/**
+ * 大版本换代升级（结构迁移，2026-08-21 用户要求：卸载旧版 → 安装新版，而非直接覆盖）：
+ *  1. 下载远端全部文件到临时目录（根级白名单，含新结构 lib/guardian/skills）
+ *  2. 校验：package.json 版本 + 全部 .js/.mjs 语法
+ *  3. 整目录备份旧版（可回滚）→ 卸载（清空安装目录）→ 新版整目录就位（原子 rename）
+ *  4. 任一步失败 → 旧版整目录原子移回（无逐项残留）
+ * @param {string} token
+ * @param {object} check checkForUpdate 结果（含 structureMismatch）
+ * @param {object} paths {root, stateDir, tmpDir, bakDir}
+ * @returns {Promise<{ok:boolean, updated:boolean, majorUpgrade:boolean, from?:string, to?:string, error?:string}>}
+ */
+async function applyMajorUpgrade(token, check, { root, stateDir, tmpDir, bakDir }) {
+  try {
+    // 1) 下载新结构全部文件到临时目录（先拉取校验，通过才动本地）
+    await fs.rm(tmpDir, { recursive: true, force: true })
+    await fs.mkdir(tmpDir, { recursive: true })
+    const files = await fetchFileList(token)
+    if (files.length === 0) throw new Error('新结构文件清单为空（远端可能未提交完整新版本）')
+    for (const rel of files) {
+      const dest = join(tmpDir, rel)
+      await fs.mkdir(dirname(dest), { recursive: true })
+      const buf = await fetchRaw(token, rel)
+      await fs.writeFile(dest, buf)
+    }
+    // 2) 校验：package.json 版本 + 全部 .js/.mjs 语法
+    const newPkg = JSON.parse(await fs.readFile(join(tmpDir, 'package.json'), 'utf8'))
+    if (compareVersions(newPkg.version || '0', check.remoteVersion) !== 0) {
+      throw new Error(`新版本声明不一致: pkg=${newPkg.version} remote=${check.remoteVersion}`)
+    }
+    for (const rel of files) {
+      if (!/\.(js|mjs|cjs)$/.test(rel)) continue
+      const err = await syntaxCheck(join(tmpDir, rel))
+      if (err) throw new Error(`新版本文件语法错误 ${rel}: ${err}`)
+    }
+    // 3) 旧版整目录让位 → bakDir（原子，含隐藏文件），新版整目录就位（原子 rename）
+    const rootExists = await fs.access(root).then(() => true).catch(() => false)
+    if (rootExists) {
+      await fs.rm(bakDir, { recursive: true, force: true }) // 清上一次升级残留快照
+      await fs.rename(root, bakDir) // 卸载旧版：整目录让位（含 node_modules、隐藏文件）
+    }
+    await fs.rename(tmpDir, root) // 安装新版：整目录原子就位
+    return { ok: true, updated: true, majorUpgrade: true, from: check.installedVersion, to: newPkg.version }
+  } catch (e) {
+    // 4) 失败回滚：旧版仍整体在 bakDir → 原子移回（未发生让位则无需回滚）
+    const errMsg = String(e?.message ?? e)
+    try {
+      await fs.rm(tmpDir, { recursive: true, force: true })
+      const rootNow = await fs.access(root).then(() => true).catch(() => false)
+      const bakNow = await fs.access(bakDir).then(() => true).catch(() => false)
+      if (!rootNow && bakNow) {
+        await fs.rename(bakDir, root) // 原子移回旧版
+      } else if (bakNow) {
+        await fs.rm(bakDir, { recursive: true, force: true }) // 极端残留只清理 bak，不覆盖新装
+      }
+    } catch (rb) { /* 回滚失败也报告原始错误 */ }
+    return { ok: false, updated: false, majorUpgrade: true, from: check.installedVersion, to: check.remoteVersion, error: `大版本升级失败（已回滚旧版）: ${errMsg}` }
   }
 }

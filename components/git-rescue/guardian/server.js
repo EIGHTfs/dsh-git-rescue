@@ -50,6 +50,14 @@ const CFG = {
   preRestartChangeWindowMs: Number(process.env.GUARDIAN_PRERESTART_WINDOW_MS || 10 * 60 * 1000),
   // v1.12.0：救援前插件自更新（默认跟随 AUTO_UPDATE_ENABLED；GUARDIAN_SELF_UPDATE=0 可关）
   selfUpdate: process.env.GUARDIAN_SELF_UPDATE !== '0' && AUTO_UPDATE_ENABLED,
+  // v1.13.0：3080 透明代理守护（官方 proxy.js：0.0.0.0:3080 -> 127.0.0.1:3081）
+  // 主实例 3081 常被绕过 runner 直接拉起，导致配套 3080 代理无人托管（2026-08-20 实测）。
+  // guardian 在此兜底：DSH 健康时若 proxy.js 进程缺失 → 自动拉起（GUARDIAN_PROXY_ENABLED=0 可关）。
+  proxyEnabled: process.env.GUARDIAN_PROXY_ENABLED !== '0',
+  proxyListenHost: process.env.GUARDIAN_PROXY_HOST || '0.0.0.0',
+  proxyListenPort: Number(process.env.GUARDIAN_PROXY_PORT || 3080),
+  proxyTargetHost: process.env.GUARDIAN_PROXY_TARGET_HOST || '127.0.0.1',
+  proxyTargetPort: Number(process.env.GUARDIAN_PROXY_TARGET_PORT || 3081),
 }
 
 // 是否测试环境（v1.11.0）：测试环境不自动救援——插件编写导致的崩溃由开发者自行解决
@@ -64,6 +72,8 @@ const RESTART_REQUEST_FILE = join(CFG.dshHome, 'git-rescue', 'restart-request.js
 // ============ 状态 ============
 const state = {
   dsh: 'unknown',            // 'running' | 'stopped' | 'recovering'
+  proxy: 'unknown',          // v1.13.0：'running' | 'stopped' | 'starting'
+  proxyStartAt: null,        // v1.13.0：最近一次触发 proxy 拉起的时间（防重复 spawn）
   lastOkAt: null,
   lastErrorAt: null,
   failCount: 0,
@@ -140,6 +150,79 @@ function startDsh() {
     return
   }
   child.unref()
+}
+
+// ============ 3080 透明代理守护（v1.13.0） ============
+// 背景：官方 start.sh/runner.js 是"3081 web + 3080 proxy"一起拉起；但主实例常被
+// 绕过 runner 直接 `bin.js web --port 3081` 拉起（孤儿进程），3080 从此无人托管。
+// guardian 在此兜底：DSH 健康时若 proxy.js 进程缺失 → 用官方 proxy.js 拉起。
+
+/** 解析官方 proxy.js 启动命令（与 resolveDshStartCmd 同根推导）。 */
+function resolveProxyStartCmd() {
+  const nodeBin = process.execPath
+  const proxyBin = join(nodeBin.replace(/\/bin\/node$/, ''), 'bin', 'proxy.js')
+  return `${nodeBin} ${proxyBin}`
+}
+
+/** 查找监听 CFG.proxyListenPort 的进程 PID（按端口精确匹配，防多实例串扰）。 */
+async function findProxyPid() {
+  try {
+    const { execFile } = await import('node:child_process')
+    const out = await new Promise((resolve, reject) => {
+      execFile('ss', ['-tlnp'], (err, stdout) => err ? reject(err) : resolve(stdout))
+    })
+    for (const line of String(out).split('\n')) {
+      // ss 行示例: LISTEN 0 511 0.0.0.0:3080 0.0.0.0:* users:(("node",pid=1234,fd=21))
+      if (!line.includes(`:${CFG.proxyListenPort}`)) continue
+      const m = line.match(/pid=(\d+)/)
+      if (m) return Number(m[1])
+    }
+  } catch { /* ss 不可用 */ }
+  return null
+}
+
+/** 拉起 3080 透明代理（官方 proxy.js，端口来自 CFG，env 注入覆盖默认值）。 */
+function startProxy() {
+  if (!CFG.proxyEnabled) return
+  const cmd = resolveProxyStartCmd()
+  log('info', `启动透明代理: ${cmd} (${CFG.proxyListenHost}:${CFG.proxyListenPort} -> ${CFG.proxyTargetHost}:${CFG.proxyTargetPort})`)
+  fs.mkdir(join(CFG.dshHome, 'git-rescue'), { recursive: true }).catch(() => {})
+  const child = startDshWithLog(cmd, {
+    logFile: STDERR_FILE,
+    env: {
+      ...process.env,
+      PROXY_LISTEN_HOST: CFG.proxyListenHost,
+      PROXY_LISTEN_PORT: String(CFG.proxyListenPort),
+      PROXY_TARGET_HOST: CFG.proxyTargetHost,
+      PROXY_TARGET_PORT: String(CFG.proxyTargetPort),
+    },
+  })
+  if (!child) {
+    log('error', `proxy spawn 失败: ${cmd}`)
+    return
+  }
+  child.unref()
+}
+
+/** 兜底检查：DSH 健康时若 proxy 缺失则拉起。返回当前 proxy 状态。 */
+async function ensureProxy() {
+  if (!CFG.proxyEnabled) {
+    state.proxy = 'unknown'
+    return state.proxy
+  }
+  const pid = await findProxyPid()
+  if (pid) {
+    state.proxy = 'running'
+    return state.proxy
+  }
+  // 已触发拉起但进程未就绪（spawn 需时间）→ 30s 内不重复 spawn
+  if (state.proxy === 'starting' && state.proxyStartAt && Date.now() - state.proxyStartAt < 30_000) {
+    return state.proxy
+  }
+  state.proxy = 'starting'
+  state.proxyStartAt = Date.now()
+  startProxy()
+  return state.proxy
 }
 
 // ============ git 救援核心 ============
@@ -429,6 +512,50 @@ async function selfUpdateBeforeRecover() {
  *  - 手动 recover（source=manual）：先拦截活跃对话；无活跃对话时，记录重启前 10 分钟内变动的文件，
  *    记录完毕再重启（防回退丢掉开发者刚写的文件）。
  */
+/**
+ * 唤起纯净环境兜底（2026-08-20 用户约定）：主环境长时间无法恢复（flapping/救援失败）时，
+ * 拉起 dsh-test-home-clean 纯净实例（3083 起首个空闲端口 + 反代 3084），
+ * 让人先有一个可用的 DSH 入口，再按 skill 恢复流程处理主环境。
+ * 幂等：已运行则跳过；纯净环境不可用/脚本缺失则静默（不影响 guardian 主流程）。
+ */
+async function wakeCleanEnv(reason = '') {
+  try {
+    const script = '/vol1/@appshare/DeepSeekHarness/workspace/dsh-clean-env.sh'
+    const name = 'dsh-test-home-clean'
+    const portFile = '/vol1/@appshare/DeepSeekHarness/workspace/dsh-test-home-clean/.dsh-env-port'
+    // 已运行则跳过（读端口文件 + 探活）
+    try {
+      const port = (await fs.readFile(portFile, 'utf8')).trim()
+      if (port) {
+        const p = await probeDshHealth(fetch, '127.0.0.1', Number(port), { apiPath: CFG.probeApiPath, toolsPath: CFG.probeToolsPath })
+        if (p.ok) {
+          log('info', `纯净环境已在运行（${reason}），无需唤起（:${port}）`)
+          return { ok: true, already: true, port }
+        }
+      }
+    } catch { /* 未运行或读端口失败，继续唤起 */ }
+    try {
+      await fs.access(script)
+    } catch {
+      log('warn', `唤起纯净环境失败：脚本不存在 ${script}（${reason}）`)
+      return { ok: false, error: 'script missing' }
+    }
+    const { spawn } = await import('node:child_process')
+    const child = spawn('/bin/bash', [script, 'start', name], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, PATH: process.env.PATH || '/usr/bin:/bin' },
+    })
+    child.unref()
+    log('warn', `⛑ 唤起纯净环境（${reason}）：${script} start ${name}`)
+    fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'clean-env-wake', msg: `唤起纯净环境: ${reason}` }) + '\n').catch(() => {})
+    return { ok: true }
+  } catch (e) {
+    log('error', `唤起纯净环境失败: ${String(e?.message ?? e)}`)
+    return { ok: false, error: String(e?.message ?? e) }
+  }
+}
+
 async function recover(source = 'auto') {
   if (state.manualBusy) return { ok: false, error: 'busy' }
   state.manualBusy = true
@@ -515,6 +642,26 @@ async function recover(source = 'auto') {
     if (!reset.ok) { log('error', `git reset 失败: ${reset.error}`); state.dsh = 'error'; return { ok: false, error: reset.error } }
     log('info', `已回退到 ${good}（from ${head || '无提交'}）`)
 
+    // 3.5) 插件树健康体检（2026-08-20 整合）：回退后、重启前，修复「声明 client 但产物缺失」
+    //      类问题——即使带病插件在 git 历史里（回退后仍在），也在拉起前修掉，防 Failed to load plugins 崩溃循环
+    try {
+      const { pluginTreeHealthCheck } = await import('../lib/plugin-health.js')
+      const ph = await pluginTreeHealthCheck(CFG.dshHome)
+      if (ph.findings.length) {
+        log('warn', `🩺 插件树体检发现 ${ph.findings.length} 个问题:`)
+        for (const f of ph.findings) log('warn', `    [${f.plugin}] ${f.type}: ${f.detail}`)
+      }
+      if (ph.fixes.length) {
+        for (const x of ph.fixes) log('warn', `🩺 自动修复: ${x.action} — ${x.detail}`)
+      } else if (ph.findings.length) {
+        log('warn', '🩺 体检发现问题但无需自动修复（非 client 声明类），继续拉起')
+      } else {
+        log('info', '🩺 插件树体检通过')
+      }
+    } catch (e) {
+      log('error', `🩺 插件树体检执行失败（不阻断拉起）: ${String(e?.message ?? e)}`)
+    }
+
     // 4) 重启 DSH
     startDsh()
 
@@ -534,6 +681,8 @@ async function recover(source = 'auto') {
     } else {
       state.dsh = 'error'
       log('error', `救援完成但 DSH 仍未健康（回退到 ${good}）`)
+      // 2026-08-20 用户约定：回退后仍不健康 = 长时间未恢复 → 唤起纯净环境兜底
+      await wakeCleanEnv(`recover-ok=false (rolled back to ${good})`)
     }
     return { ok, to: good, from: head }
   } catch (e) {
@@ -555,6 +704,15 @@ async function tick() {
     state.dsh = 'running'
     state.lastOkAt = Date.now()
     state.failCount = 0
+    // v1.13.0：每轮 tick 都实时检查 3080 透明代理（findProxyPid 按端口查，
+    // 缺失才拉起；不依赖 state.proxy 缓存，防"掉线后不再检查"）
+    const prevProxy = state.proxy
+    await ensureProxy()
+    if (prevProxy !== 'starting' && state.proxy === 'starting') {
+      log('warn', '透明代理缺失，已触发拉起（下一轮 tick 复核）')
+    } else if (prevProxy === 'starting' && state.proxy === 'running') {
+      log('info', '透明代理已恢复')
+    }
     return
   }
   // flapping 冷却期：检出无限重启后暂停自动救援，给人介入窗口
@@ -612,6 +770,8 @@ async function tick() {
         // 升级处理：不再自动拉起（避免无限循环）；现场已由 recover() 的 commit 保留
         // 事件落盘（guardian-events.jsonl 已有 log 记录；这里补一条显式 flapping 事件）
         fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'flapping', msg: `flapping-detected: ${flap.count} restarts in ${CFG.flappingWindowMs / 60000}min` }) + '\n').catch(() => {})
+        // 2026-08-20 用户约定：长时间无法恢复 → 唤起纯净环境，让人先有可用入口
+        await wakeCleanEnv(`flapping-detected: ${flap.count} restarts in ${CFG.flappingWindowMs / 60000}min`)
         // 冷却：重置 failCount 防止立即再次触发 recover 造成死循环；人工介入后 reset()
         flapping.reset()
         state.failCount = 0
@@ -667,7 +827,7 @@ function startWeb() {
           selfUpdate: { enabled: CFG.selfUpdate, autoUpdateEnabled: AUTO_UPDATE_ENABLED },
           restartRequest: await readRestartRequest(),
           state: {
-            dsh: state.dsh, lastOkAt: state.lastOkAt, lastErrorAt: state.lastErrorAt,
+            dsh: state.dsh, proxy: state.proxy, lastOkAt: state.lastOkAt, lastErrorAt: state.lastErrorAt,
             failCount: state.failCount, lastRecoveryAt: state.lastRecoveryAt,
             lastRecoveryResult: state.lastRecoveryResult,
             flapping: { restarts: flapping.restarts, cooldownUntil: state.flappingCooldownUntil },
@@ -698,6 +858,19 @@ function startWeb() {
         startDsh()
         return send(res, 200, { ok: true })
       }
+      if (path === '/api/proxy/start' && req.method === 'POST') {
+        // v1.13.0：手动拉起 3080 透明代理
+        if (!CFG.proxyEnabled) return send(res, 400, { ok: false, error: 'proxy 守护已禁用 (GUARDIAN_PROXY_ENABLED=0)' })
+        const pid = await findProxyPid()
+        if (pid) return send(res, 200, { ok: true, alreadyRunning: true, pid })
+        startProxy()
+        return send(res, 200, { ok: true, started: true })
+      }
+      if (path === '/api/proxy/status' && req.method === 'GET') {
+        // v1.13.0：查询 3080 代理状态
+        const pid = await findProxyPid()
+        return send(res, 200, { ok: true, enabled: CFG.proxyEnabled, pid, state: state.proxy })
+      }
       return send(res, 404, { ok: false, error: `unknown route ${path}` })
     } catch (e) {
       return send(res, 500, { ok: false, error: String(e?.message ?? e) })
@@ -719,6 +892,7 @@ async function readRestartRequest() {
 }
 
 log('info', `dsh-git-rescue guardian 启动: probe=${CFG.dshHost}:${CFG.dshPort}, gitHome=${CFG.dshHome}, interval=${CFG.checkIntervalMs}ms, threshold=${CFG.failThreshold}${IS_TEST_HOME ? ' [测试环境：自动救援已禁用]' : ''}`)
+log('info', `透明代理守护: ${CFG.proxyEnabled ? `ON (${CFG.proxyListenHost}:${CFG.proxyListenPort} -> ${CFG.proxyTargetHost}:${CFG.proxyTargetPort})` : 'OFF (GUARDIAN_PROXY_ENABLED=0)'}`)
 startWeb()
 setInterval(tick, CFG.checkIntervalMs)
 tick()

@@ -4,6 +4,8 @@ description: DeepSeek Harness (DSH) 双实例测试环境（蓝绿部署）的�
 whenToUse: 用户提到"测试实例"、"测试环境"、"dsh-test"、"蓝绿部署"、"第二个实例"、"插件加载失败/起不来"、需要重启/停止测试实例、验证测试环境状态，或在本 NAS 上调试 DSH 插件时。
 ---
 
+> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
+
 # DSH 双实例测试环境（dsh-test-env）
 
 > 处理 DSH 测试实例 / 插件热开发 / 双实例调试时加载。本 skill 是 `dsh-blue-green-deploy` 的权威更新版，信息冲突时以本文件为准。

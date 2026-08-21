@@ -4,6 +4,8 @@ description: DSH git 版本管理 + 崩溃自动救援项目（EIGHTfs/dsh-git-r
 whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏测试、崩溃记录整理、备份仓库配置、宣传发帖、商店上线、主实例部署，或复盘本项目的崩溃/救援实测数据时
 ---
 
+> ⭐ **先记住我**：任何会话开始前，先读用户档案 `.dsh/skills/remember-me.md`（优先级最高的 skill）：我是谁、我怎么用你、我立过的规矩。
+
 # dsh-git-rescue 项目指南
 
 > 经验来源：2026-08-18 开发实测 + 仓库 `docs/crash-records-test-env.md`（测试环境崩溃记录）+ `docs/harness-startup-failure-log.md`（生产启动失败史）。核心原则：**历史即资产，救援 = git 回退，测试 = 故意破坏**。
@@ -30,6 +32,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 
 | 版本 | 内容 |
 |------|------|
+| 1.13.0 | 功能13：**3080 透明代理守护**（guardian 兜底拉起官方 proxy.js：0.0.0.0:3080→127.0.0.1:3081；主实例绕过 runner 直接拉起时 3080 无人托管——实测根因；CFG：GUARDIAN_PROXY_ENABLED=0 关 / GUARDIAN_PROXY_PORT / GUARDIAN_PROXY_TARGET_PORT；findProxyPid **按监听端口匹配**（ss -tlnp）防多实例串扰；tick 每轮无条件 ensureProxy（防 state 缓存短路）；starting 30s 防重复 spawn；API：GET /api/proxy/status、POST /api/proxy/start；status 暴露 state.proxy。测试抓 2 bug：ps 全局匹配串扰 + state 缓存永不复查） |
 | 1.12.0 | 功能12：救援前插件自更新（guardian recover 前先 checkForUpdate→applyUpdate 换新磁盘代码再救援；token 读取同插件侧 data/sensitive/github-token 优先、git-rescue/token 回退；测试环境同样允许；GUARDIAN_SELF_UPDATE=0 可关；失败 fail-soft 不阻断；status 暴露 selfUpdate） |
 | 1.11.0 | 功能11：测试环境不自动救援（guardian 探测 DSH_HOME 为 `dsh-test-*` 即禁用自动 git 回退/拉起，插件崩溃由开发者自行解决；判定抽离 `lib/test-home.js` 单一真源，guardian 与插件共用）+ 活跃对话保护（救援前检测 `running\|\|continueRunning`，存在则落盘 `git-rescue/restart-request.json` 提交重启申请，不打断对话；未装 session-manager 降级扫描事件流仅 running；DSH down 视为无活跃）+ 手动救援前记录近期变动文件（`pre-restart-changes-<ts>.json`，默认 10 分钟窗口） |
 | 1.10.0 | 功能10：测试环境路径判定（`status.self.isTest`，DSH_HOME 含 `dsh-test-*` 前缀目录；替代端口范围 3083-3182——端口会漂移、残留实例也可能落在范围内）+ 沙盒环境能力检测（`lib/sandbox.js`：NoNewPrivs/CapEff/sudo 可行性/只读挂载，status 暴露 `sandbox` 字段，供 guardian/故障分类决策） |
@@ -57,7 +60,8 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 - 触发：连续 `failThreshold=3` 次失败才救援（防单次误判）
 - 救援流程：commit 坏现场 → markBad(坏提交) → `lastGoodCommit`（跳过 bad 标记）→ `reset --hard` → `startDsh`（DSH_START_CMD 或自动推导 bin.js）→ 轮询健康（startWaitMs 默认 15s）
 - 配置全环境变量：DSH_PORT/DSH_HOME/GUARDIAN_PORT/GUARDIAN_INTERVAL_MS/GUARDIAN_FAIL_THRESHOLD/DSH_START_CMD/GUARDIAN_SESSION_LIST_PATH/GUARDIAN_PRERESTART_WINDOW_MS
-- **v1.12.0 救援前自更新**：recover 开头最先执行 `selfUpdateBeforeRecover()`——checkForUpdate（联网 api.github.com）→ 有新版 applyUpdate（替换磁盘插件文件，当前进程仍旧代码，重启后生效）→ 继续救援；失败不阻断；`GUARDIAN_SELF_UPDATE=0` 关闭
+- **v1.13.0 透明代理守护（3080）**：DSH 健康分支每轮 tick 调 `ensureProxy()`——`findProxyPid()` 用 `ss -tlnp` **按监听端口**找 proxy（不是 ps 全局匹配！防把 3080 误判成测试 3093 等），缺失则 `startProxy()` spawn 官方 proxy.js（env 注入 PROXY_LISTEN_PORT/TARGET_PORT，stderr 落盘）；`state.proxy='starting'` 30s 内不重复 spawn。**坑（实测抓到的 bug）**：不能只在 `state.proxy !== 'running'` 时才检查——proxy 掉线后 state 缓存仍是 running，永远不再拉起；必须每轮无条件实时查端口
+- **v1.12.0 救援前自更新**：recover 开头最先执行 `selfUpdateBeforeRecover()`——checkForUpdate（联网 api.github.com）→ 有新版 applyUpdate（替换磁盘插件文件，当前进程仍旧代码，重启后生效）→ 继续救援；失败不阻断；`GUARDIAN_SELF_UPDATE=0` 关闭。⚠️ **改代码必须同步升版本号**（applyUpdate 按 `compareVersions(remote, installed) > 0` 才覆盖，本地版本 >= 远端即不会被自更新冲掉）
 - **v1.11.0 前置闸门（recover 开头，自动/手动都过）**：
   - 测试环境（`isTestHomePath(DSH_HOME)` 命中 `dsh-test-*`）→ **不救援**：保留现场（stderr+TERM 上下文）+ 事件 + 冷却，返回 `{testEnv:true, blocked:'test-env-no-rescue'}`——插件编写导致的崩溃由开发者自行解决
   - 活跃对话检测：`GET /api/session-manager/list`（装了 session-manager）→ 任一 `running||continueRunning` 即拦截；404（未装）→ 降级 `zstdcat` 扫描 sessions 事件流（尾部 turn/start 未 end = running）；fetch 失败（DSH down）→ 视为无活跃，正常救援
@@ -84,9 +88,37 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 | 5 | 破坏 cordis.patch.yml 致无法启动（灭门级） | guardian 全自动救援 |
 
 - 测试实例（3083-3182）用法见 `dsh-test-env` skill；干净隔离基线见 `dsh-clean-env` skill
+- ⚠️ **纯净环境约定（2026-08-20 用户确立）**：纯净环境（dsh-clean-env.sh 生成的 dsh-test-home-clean）**唯一允许的插件 = 救援插件 dsh-git-rescue**——干净基线 + 救生圈，测试插件搞崩环境时有 git 回退兜底；其余插件一律不装。脚本 create 已内置（cordis.patch.yml insert + node_modules_local 复制 + package.json file: 依赖 + 软链）
+- ⚠️ **测试/纯净环境端口互换陷阱（2026-08-20 实测）**：dsh-clean-env.sh 的 `find_free_port` 从 3083 起找第一个空闲端口——若共享测试环境 dsh-test-home 当时没占 3083，纯净环境会抢到 3083，测试环境反而跑在 3183+。判定实例归属**必须实测进程 environ 的 DSH_HOME**（`tr '\0' '\n' < /proc/<pid>/environ | grep DSH_HOME`），不能凭端口号猜
 - ⚠️ **共享测试环境 dsh-test-home 可能被其他会话占用**（实测：dsh-ai-work-archive 插件在开发中且曾导致实例启动失败）——做对照/隔离测试优先用 dsh-clean-env 的独立环境，不要动共享测试环境的 cordis.patch.yml
 - ⚠️ **主实例 test-sync 类插件会自动重启测试实例**（监听测试实例 cordis.patch.yml 变更）——崩溃测试前先确认无此类干扰，或禁用
 - 单测运行：`GITHUB_TOKEN=xxx node test-git-rescue.mjs`（T6 真实推送需 token；当前 23/23 通过）
+
+## 三·补、开发流程纪律：测试环境开发，验收后同步（2026-08-20 确立，硬规则）
+
+> **本地任何在开发中的项目（插件及其他）统一在测试环境完成 分析→开发→测试→验收，验收合格后同步回本地环境，待确认。本规则只做 skill 约束，不要求代码级实现。**
+
+```
+分析 → 开发 → 测试 → 验收 → 验收合格 → 同步回本地环境 → 待确认
+（全程在测试环境完成）           （合格才同步）          （同步后确认）
+```
+
+| 阶段 | 在哪里做 | 要求 |
+|------|----------|------|
+| **分析** | 测试环境 | 先按 feature-idea-proactive-analysis 分析可行性/方案/风险，写 README 待办（feature-todo-readme-cycle），不直接写码 |
+| **开发** | 测试环境 | 在测试环境开发代码，不动主环境部署副本 |
+| **测试** | 测试环境 | 单测 + 测试实例实测（故意破坏矩阵/功能验证） |
+| **验收** | 测试环境 | 全部通过 + 确认验收 |
+| **同步回本地** | 验收合格后 | 同步部署副本到本地/主环境（走 dsh-deploy-gate / dsh-plugin-main-install 规范） |
+| **待确认** | 同步后 | 同步完成告知，确认后才算最终完成 |
+
+**铁律**：
+1. **测试环境是唯一开发场地**——分析/开发/测试/验收全程在测试实例（3083-3182 / dsh-clean-env 独立基线），**禁止直接改主环境部署副本**；适用范围 = 本地**所有在开发中的项目**（不止插件）
+2. **验收合格才同步**——四步全过 + 验收后才同步回本地环境；未验收 = 不同步
+3. **同步后待确认**——同步回本地不是终点，要告知并等确认
+4. **只做此约束，无代码级限制**——本规则是纯 skill 约束（不要求做成代码级工具/API/guardian 自动执行；与 skill-code-parity 的「补代码级」不同，明确不要代码级）
+5. **与 deploy-gate 一致**：主环境部署必须过闸门（测试验证/版本 1.x/node --check/测试实例在线）
+6. **对照 dsh-git-rescue 自身**：本插件在测试环境测破坏矩阵、验收后同步——同一纪律适用所有项目
 
 ## 四、已知坑（实测踩坑记录）
 

@@ -23,7 +23,6 @@ import { verifyToken, pushSnapshot } from './github.js'
 import { getDeviceId, defaultBackupRepo } from './device.js'
 import { computeScoresFromEvents, refreshScoreSnapshot, scoreFileName } from './scores.js'
 import { AUTO_UPDATE_ENABLED, UPDATE_INTERVAL_MS, checkForUpdate, applyUpdate } from './self-update.js'
-import { registerTestEnvEntry } from './test-env-entry.js'
 import { linkSessionRecovery } from './session-link.js'
 import { detectSandbox } from './sandbox.js'
 
@@ -692,9 +691,6 @@ function defineToolSimple(name, description, fn, params) {
 // ---------- 插件入口 ----------
 
 export async function apply(ctx) {
-  // 测试环境入口（整合自 dsh-test-env-entry，v1.9.0）：侧边栏面板 + /api/dsh-test-env/*
-  try { await registerTestEnvEntry(ctx, {}); }
-  catch (e) { console.log('[git-rescue] test-env-entry 挂载失败: ' + String(e?.message ?? e)); }
 
   await loadConfig()
 
@@ -786,7 +782,22 @@ export async function apply(ctx) {
     }
   } catch { /* 非仓库/不可写则跳过 */ }
   startTimers()
-  await appendEvent('startup', { pid: process.pid })
+  // 2026-08-20 增强（用户要求）：每次启动记录设备指纹，中途换设备可从 events 对比发现
+  const bootDevice = await getDeviceId(STATE_ROOT).catch(() => ({ id: 'unknown', source: 'unknown' }))
+  await appendEvent('startup', { pid: process.pid, device: { id: bootDevice.id, source: bootDevice.source } })
+
+  // 插件树健康体检（2026-08-20 整合）：启动自检，发现「声明 client 但产物缺失」自动修复
+  // ——即使带病插件被装上，也在本次启动就修掉，防下一次 Failed to load plugins 崩溃
+  try {
+    const { pluginTreeHealthCheck } = await import('./plugin-health.js')
+    const ph = await pluginTreeHealthCheck(DSH_ROOT)
+    if (ph.findings.length) {
+      console.log(`[git-rescue] 🩺 插件树体检发现 ${ph.findings.length} 个问题:`)
+      for (const f of ph.findings) console.log(`[git-rescue]   [${f.plugin}] ${f.type}: ${f.detail}`)
+    }
+    for (const x of ph.fixes) console.log(`[git-rescue] 🩺 自动修复: ${x.action} — ${x.detail}`)
+    if (!ph.findings.length && !ph.fixes.length) console.log('[git-rescue] 🩺 插件树体检通过')
+  } catch { /* 体检失败不影响启动 */ }
 
   // 救援积分：DSH 启动后从事件流实时计算并缓存快照（防刷分——权威是事件流，不是可写文件）
   try {

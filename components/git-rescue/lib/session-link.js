@@ -41,8 +41,10 @@ export async function sessionManagerAvailable() {
         method: 'GET',
         signal: AbortSignal.timeout(3000),
       })
-      // 200/404/405/500 都说明路由存在（插件已装）；000/网络错误才说明没装
-      if (res.status !== 0) return true
+      // 修复（2026-08-20，对照 dsh-rescue-restore 权威 skill 缺陷#2）：
+      // 404/405 = 路由不存在 = session-manager 未安装，应跳过联动（不能当已装）；
+      // 只有 200 或 5xx（服务在响应但内部错误）才算「已装」；000/网络错误 = 没装
+      if (res.status === 200 || res.status >= 500) return true
     } catch { /* 继续试下一个端点 */ }
   }
   return false // 两个端点都不响应 → 未安装
