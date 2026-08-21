@@ -524,7 +524,7 @@
     if (!question) return;
     // 显示对话历史区
     if (history.style.display === 'none') history.style.display = '';
-    history.innerHTML += `<div class="chat-user">你: ${escapeHtml(question)}</div>`;
+    history.innerHTML += `<div class="chat-user">${escapeHtml(question)}</div>`;
     input.value = '';
     history.scrollTop = history.scrollHeight;
     // 取当前日志作为上下文
@@ -534,7 +534,7 @@
       : '';
     const r = await api('/api/llm-chat', 'POST', { question, logContext });
     if (r.ok) {
-      history.innerHTML += `<div class="chat-assistant">助手: ${escapeHtml(r.answer || '无回复')}</div>`;
+      history.innerHTML += `<div class="chat-assistant">${escapeHtml(r.answer || '无回复')}</div>`;
     } else {
       history.innerHTML += `<div class="chat-error">❌ ${escapeHtml(r.error || '请求失败')}</div>`;
     }

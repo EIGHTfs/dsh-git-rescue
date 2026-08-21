@@ -1593,17 +1593,17 @@ function startWeb() {
       }
       // ===== 与日志 LLM 对话（2026-08-21 新增）=====
       if (path === '/api/llm-chat' && req.method === 'POST') {
-        // 用户选中日志条目 + 输入问题 → LLM 基于日志回答
+        // 用户输入问题 → LLM 基于日志回答（纯文本模式，不强制 JSON）
         const body = await readJson(req)
         const { llmChat } = await import('../lib/llm.js')
         const logContext = body?.logContext || state.log.slice(-50).map((e) => `[${e.timeLocal || e.time}] ${e.level}: ${e.msg}`).join('\n')
         const question = body?.question || '请分析上述日志'
-        const systemPrompt = `你是 DSH (DeepSeek Harness) 救援助手。用户会提供守护进程日志和你的问题，你需要基于日志内容回答问题或提供建议。输出纯文本（Markdown 格式），不要输出 JSON。`
+        const systemPrompt = `你是 DSH (DeepSeek Harness) 救援助手。用户会提供守护进程日志和你的问题，你需要基于日志内容回答问题或提供建议。直接输出回答正文（Markdown 格式），不要输出 JSON，不要加"助手:"之类前缀。`
         const userPrompt = `【守护进程日志】\n${logContext}\n\n【用户问题】\n${question}`
-        const r = await llmChat({ dshHome: CFG.dshHome, system: systemPrompt, user: userPrompt })
+        const r = await llmChat({ dshHome: CFG.dshHome, system: systemPrompt, user: userPrompt, jsonMode: false })
         if (r.ok) {
           log('info', `LLM 对话: ${question.slice(0, 50)}...`)
-          return send(res, 200, { ok: true, answer: r.raw || JSON.stringify(r.json, null, 2) })
+          return send(res, 200, { ok: true, answer: r.raw })
         } else {
           log('warn', `LLM 对话失败: ${r.error}`)
           return send(res, 500, { ok: false, error: r.error })
