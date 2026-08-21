@@ -22,6 +22,7 @@ import { createFlappingDetector } from '../lib/flapping.js'
 import { probeDshHealth } from '../lib/probe.js'
 import { startDshWithLog, captureExitContext, readLogTail } from '../lib/process-capture.js'
 import { classifyFault, probeSystemHints } from '../lib/fault-classify.js'
+import { isTestHomePath } from '../lib/test-home.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -41,11 +42,21 @@ const CFG = {
   probeApiPath: process.env.GUARDIAN_PROBE_API_PATH || '/api/git-rescue/status',
   // tools 枚举探测默认关闭（DSH 无标准 /api/tools；显式配置才启用）
   probeToolsPath: process.env.GUARDIAN_PROBE_TOOLS_PATH || null,
+  // 活跃对话判定（v1.11.0）：装了 session-manager 用 running||continueRunning（口径1），
+  // 未装则降级扫描事件流仅 running（口径3）。DSH down（API 不可达）→ 视为无活跃对话，正常救援。
+  sessionListPath: process.env.GUARDIAN_SESSION_LIST_PATH || '/api/session-manager/list',
+  // 手动重启前记录变动的文件（时间窗，默认 10 分钟）
+  preRestartChangeWindowMs: Number(process.env.GUARDIAN_PRERESTART_WINDOW_MS || 10 * 60 * 1000),
 }
+
+// 是否测试环境（v1.11.0）：测试环境不自动救援——插件编写导致的崩溃由开发者自行解决
+const IS_TEST_HOME = isTestHomePath(CFG.dshHome)
 
 const LOG_FILE = join(CFG.dshHome, 'git-rescue', 'guardian-dsh.log')
 const EVENTS_FILE = join(CFG.dshHome, 'git-rescue', 'guardian-events.jsonl')
 const STDERR_FILE = join(CFG.dshHome, 'git-rescue', 'dsh-stderr.log')
+// v1.11.0：存在进行中活跃对话时，不自动重启，落盘「重启申请」供人工/后续处理
+const RESTART_REQUEST_FILE = join(CFG.dshHome, 'git-rescue', 'restart-request.json')
 
 // ============ 状态 ============
 const state = {
@@ -201,12 +212,204 @@ async function trySystemFixWithSudo() {
   }
 }
 
-/** 救援流程：保留现场 → 标记坏点 → 回退 → 重启 → 健康检查。 */
-async function recover() {
+// ============ 活跃对话检测（v1.11.0） ============
+
+/**
+ * 检测是否存在「进行中活跃对话」。
+ * 口径（用户约定）：
+ *  - 装了 session-manager（/api/session-manager/list 可达）→ running || continueRunning
+ *  - 未装（404）→ 降级扫描事件流，仅 running（hasOpenTurn：最后事件是 turn/start 未 turn/end）
+ *  - DSH down（API 不可达）→ 视为无活跃对话，正常救援
+ * @returns {{mode:'session-manager'|'eventscan'|'down', count:number, active:Array, detail:string}}
+ */
+async function detectActiveConversations() {
+  const base = `http://${CFG.dshHost}:${CFG.dshPort}`
+  try {
+    const res = await fetch(base + CFG.sessionListPath, { signal: AbortSignal.timeout(5000) })
+    if (res.status === 200) {
+      const j = await res.json().catch(() => null)
+      const sessions = Array.isArray(j?.sessions) ? j.sessions : []
+      const active = sessions.filter((s) => s.running || s.continueRunning)
+      const detail = active.map((s) => `${s.title || s.id}`).join('、') || '无'
+      return { mode: 'session-manager', count: active.length, active, detail }
+    }
+    if (res.status === 404) {
+      // 未装 session-manager → 降级事件流扫描（仅 running 口径）
+      return scanEventsForRunning()
+    }
+    // 其他错误（500 等）→ 保守按无活跃处理（服务异常，检测不到就当没有）
+    return { mode: 'down', count: 0, active: [], detail: 'session-manager API 异常，视为无活跃对话' }
+  } catch {
+    // fetch 失败/超时 = DSH down → 无活跃对话，正常救援
+    return { mode: 'down', count: 0, active: [], detail: 'DSH API 不可达，视为无活跃对话' }
+  }
+}
+
+/**
+ * 降级口径：扫描 $DSH_HOME/sessions 下各 session 目录的 session.jsonl.zstd 事件流，
+ * 判定最后事件是否为 turn/start 未 end（进行中回合）。
+ * 用 zstdcat（系统命令，多帧拼接 zstd 文件也能解）读尾部，逐条 JSON 解析。
+ */
+async function scanEventsForRunning() {
+  const { execFile } = await import('node:child_process')
+  const sessionsRoot = join(CFG.dshHome, 'sessions')
+  let files = []
+  try {
+    files = await walkSessionLogs(sessionsRoot)
+  } catch { /* 无会话目录 */ }
+  const active = []
+  for (const file of files.slice(0, 50)) { // 上限 50 个会话，防扫描过慢
+    try {
+      const tail = await new Promise((resolve) => {
+        execFile('zstdcat', [file], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+          if (err) return resolve('')
+          resolve(String(stdout ?? ''))
+        })
+      })
+      const lines = tail.split('\n').filter(Boolean)
+      // 从尾部向前找 turn/start / turn/end
+      for (let i = lines.length - 1; i >= 0; i--) {
+        let ev = null
+        try { ev = JSON.parse(lines[i]) } catch { continue }
+        const t = ev?.type
+        if (t === 'turn/end') break
+        if (t === 'turn/start') { active.push({ id: file.split('/').filter(Boolean).pop()?.replace(/^session-/, '') || file }); break }
+      }
+    } catch { /* 单文件解析失败跳过 */ }
+  }
+  const detail = active.map((a) => a.id).join('、') || '无'
+  return { mode: 'eventscan', count: active.length, active, detail }
+}
+
+/** 递归收集 sessions 下所有 session.jsonl.zstd（深度 ≤4，防异常深目录）。 */
+async function walkSessionLogs(root, depth = 0) {
+  if (depth > 4) return []
+  const { readdir } = await import('node:fs/promises')
+  let entries = []
+  try { entries = await readdir(root, { withFileTypes: true }) } catch { return [] }
+  const out = []
+  for (const e of entries) {
+    const p = join(root, e.name)
+    if (e.isDirectory()) out.push(...await walkSessionLogs(p, depth + 1))
+    else if (e.name === 'session.jsonl.zstd' || e.name.endsWith('.jsonl.zstd')) out.push(p)
+  }
+  return out
+}
+
+/**
+ * 落盘「重启申请」restart-request.json：存在进行中活跃对话时，guardian 不重启，
+ * 把申请写进文件（人工查看 / 后续对话结束后由脚本处理），避免打断活跃对话。
+ */
+async function submitRestartRequest({ active, source }) {
+  const req = {
+    ts: new Date().toISOString(),
+    type: 'restart-request',
+    source,                          // 'auto' | 'manual'
+    activeConversationCount: active.count,
+    activeConversations: (active.active || []).map((s) => ({ id: s.id, title: s.title, running: s.running, continueRunning: s.continueRunning })),
+    detail: active.detail,
+    mode: active.mode,
+    dshPort: CFG.dshPort,
+    dshHome: CFG.dshHome,
+    status: 'pending',               // 'pending'（待处理）→ 人工确认/后续脚本处理后置 'handled'
+    note: '存在进行中活跃对话，guardian 已挂起重启；等对话结束后人工处理（或调用 /api/recover 手动救援）',
+  }
+  try {
+    await fs.mkdir(join(CFG.dshHome, 'git-rescue'), { recursive: true })
+    await fs.writeFile(RESTART_REQUEST_FILE, JSON.stringify(req, null, 2))
+    return { ok: true, file: RESTART_REQUEST_FILE }
+  } catch (e) {
+    log('error', `重启申请落盘失败: ${String(e?.message ?? e)}`)
+    return { ok: false, error: String(e?.message ?? e) }
+  }
+}
+
+/**
+ * 手动 recover 前置：记录重启前 N 分钟内（默认 10 分钟）变动的文件。
+ * git 无法直接按"修改时间"列未提交文件，用两个信号合并：
+ *  - git status --porcelain：未提交/未跟踪的改动文件
+ *  - fs.stat mtime 在窗口内（仅对 status 列出的文件，命中窗口才算"近期变动"）
+ * 记录到 restart-request 同目录 pre-restart-changes-<ts>.json，防回退丢开发者刚写的文件。
+ */
+async function recordPreRestartChanges() {
+  const { execFile } = await import('node:child_process')
+  const out = { ts: new Date().toISOString(), windowMs: CFG.preRestartChangeWindowMs, files: [] }
+  try {
+    const status = await git(CFG.dshHome, ['status', '--porcelain'])
+    const lines = (status.stdout ?? '').split('\n').filter(Boolean)
+    const now = Date.now()
+    for (const line of lines) {
+      const path = line.slice(3).trim()
+      if (!path) continue
+      let inWindow = false
+      try {
+        const st = await import('node:fs').then((m) => m.promises.stat(join(CFG.dshHome, path)))
+        inWindow = now - st.mtimeMs <= CFG.preRestartChangeWindowMs
+      } catch { inWindow = true } // stat 失败（已删除等）保守计入
+      if (inWindow) out.files.push({ path, flag: line.slice(0, 2) })
+    }
+    await fs.mkdir(join(CFG.dshHome, 'git-rescue'), { recursive: true })
+    const file = join(CFG.dshHome, 'git-rescue', `pre-restart-changes-${Date.now()}.json`)
+    await fs.writeFile(file, JSON.stringify(out, null, 2))
+    log('warn', `📝 手动重启前 ${CFG.preRestartChangeWindowMs / 60000} 分钟内变动文件已记录（${out.files.length} 个）: ${file}`)
+    return { ok: true, file, count: out.files.length }
+  } catch (e) {
+    log('error', `重启前变动文件记录失败: ${String(e?.message ?? e)}`)
+    return { ok: false, error: String(e?.message ?? e) }
+  }
+}
+
+/** 救援流程：保留现场 → 标记坏点 → 回退 → 重启 → 健康检查。
+ * @param {string} source 'auto'（探活自动触发）| 'manual'（手动 /api/recover）
+ * v1.11.0：
+ *  - 测试环境：不自动救援（插件编写导致的崩溃由开发者自行解决），保留现场 + 冷却，不 git 回退。
+ *  - 存在进行中活跃对话（running || continueRunning，装了 session-manager 口径；未装降级事件流仅 running）：
+ *    不重启，落盘 restart-request.json 提交「重启申请」，等活跃对话结束后人工/自动处理。
+ *  - 手动 recover（source=manual）：先拦截活跃对话；无活跃对话时，记录重启前 10 分钟内变动的文件，
+ *    记录完毕再重启（防回退丢掉开发者刚写的文件）。
+ */
+async function recover(source = 'auto') {
   if (state.manualBusy) return { ok: false, error: 'busy' }
   state.manualBusy = true
   state.dsh = 'recovering'
   try {
+    // ===== v1.11.0 前置闸门 =====
+
+    // 0.0) 测试环境：不自动救援（插件编写导致的崩溃由开发者自行解决）
+    if (IS_TEST_HOME) {
+      // 保留现场（stderr + TERM 上下文），供开发者复盘
+      try {
+        const pid = await findDshPid()
+        if (pid || (await readLogTail(STDERR_FILE, 1))) {
+          const ctx = await captureExitContext(pid, CFG.dshPort, { stderrFile: STDERR_FILE })
+          log('warn', `退出现场（测试环境，不自动救援）:\n${ctx}`)
+          fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'exit-context', msg: ctx }) + '\n').catch(() => {})
+        }
+      } catch { /* 现场捕获失败不影响 */ }
+      log('warn', '⛔ 测试环境不自动救援：插件编写导致的崩溃由开发者自行解决（git 回退/拉起已禁用）。现场已保留，请开发者处理。')
+      fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'test-env-no-rescue', msg: '测试环境自动救援已禁用（插件开发崩溃由开发者自行解决），现场已保留' }) + '\n').catch(() => {})
+      state.failCount = 0
+      state.flappingCooldownUntil = Date.now() + CFG.flappingWindowMs
+      state.dsh = 'stopped'
+      return { ok: false, testEnv: true, blocked: 'test-env-no-rescue', error: '测试环境不自动救援（插件崩溃由开发者自行解决）' }
+    }
+
+    // 0.1) 存在进行中活跃对话 → 不重启，提交重启申请（自动/手动都拦；DSH down 无法检测时视为无活跃对话）
+    const active = await detectActiveConversations()
+    if (active.count > 0) {
+      await submitRestartRequest({ active, source })
+      log('warn', `⏸ 存在 ${active.count} 个进行中活跃对话——不自动重启，已提交重启申请: ${RESTART_REQUEST_FILE}（等对话结束后处理；列表: ${active.detail.slice(0, 300)}）`)
+      state.failCount = 0
+      state.flappingCooldownUntil = Date.now() + CFG.flappingWindowMs
+      state.dsh = 'stopped'
+      return { ok: false, blocked: 'active-conversation', request: RESTART_REQUEST_FILE, error: `存在 ${active.count} 个进行中活跃对话，已提交重启申请` }
+    }
+
+    // 0.2) 手动 recover：记录重启前 10 分钟内变动的文件，记录完毕再重启
+    if (source === 'manual') {
+      await recordPreRestartChanges()
+    }
+
     log('warn', '开始自动救援（git 回退）')
 
     // 0) TERM 来源追踪（v1.6.0）：抓取进程退出上下文（/proc 残留 + stderr 尾部 + 系统日志），
@@ -396,6 +599,8 @@ function startWeb() {
       if (path === '/api/status') {
         return send(res, 200, {
           ok: true,
+          testHome: IS_TEST_HOME,
+          restartRequest: await readRestartRequest(),
           state: {
             dsh: state.dsh, lastOkAt: state.lastOkAt, lastErrorAt: state.lastErrorAt,
             failCount: state.failCount, lastRecoveryAt: state.lastRecoveryAt,
@@ -412,8 +617,17 @@ function startWeb() {
         return send(res, 200, { ok: true, commits: r.ok ? r.stdout.split('\n').filter(Boolean) : [] })
       }
       if (path === '/api/recover' && req.method === 'POST') {
-        const r = await recover()
+        const r = await recover('manual')
         return send(res, r.ok ? 200 : 500, r)
+      }
+      if (path === '/api/recover-auto' && req.method === 'POST') {
+        const r = await recover('auto')
+        return send(res, r.ok ? 200 : 500, r)
+      }
+      if (path === '/api/restart-request' && req.method === 'DELETE') {
+        // 人工处理完活跃对话后，清除重启申请
+        try { await fs.rm(RESTART_REQUEST_FILE, { force: true }); return send(res, 200, { ok: true }) }
+        catch (e) { return send(res, 500, { ok: false, error: String(e?.message ?? e) }) }
       }
       if (path === '/api/start' && req.method === 'POST') {
         startDsh()
@@ -431,7 +645,15 @@ function startWeb() {
 
 // ============ 入口 ============
 
-log('info', `dsh-git-rescue guardian 启动: probe=${CFG.dshHost}:${CFG.dshPort}, gitHome=${CFG.dshHome}, interval=${CFG.checkIntervalMs}ms, threshold=${CFG.failThreshold}`)
+/** 读取当前待处理的重启申请（无则 null）。 */
+async function readRestartRequest() {
+  try {
+    const raw = await fs.readFile(RESTART_REQUEST_FILE, 'utf8')
+    return JSON.parse(raw)
+  } catch { return null }
+}
+
+log('info', `dsh-git-rescue guardian 启动: probe=${CFG.dshHost}:${CFG.dshPort}, gitHome=${CFG.dshHome}, interval=${CFG.checkIntervalMs}ms, threshold=${CFG.failThreshold}${IS_TEST_HOME ? ' [测试环境：自动救援已禁用]' : ''}`)
 startWeb()
 setInterval(tick, CFG.checkIntervalMs)
 tick()

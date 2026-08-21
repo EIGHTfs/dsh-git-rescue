@@ -96,10 +96,18 @@ node guardian/server.js
 GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 token）
 ```
 
+- **v1.11.0 功能十一：测试环境不自动救援 + 活跃对话保护**
+  - 测试环境判定抽离 `lib/test-home.js`（单一真源，guardian 与插件共用）；`dsh-test-home` / `dsh-test-rc7` / `dsh-test-clean`（含 `-` 变体）即测试环境
+  - **测试环境不自动救援**：guardian 探测到测试环境 DSH_HOME 后，崩溃只保留现场（stderr + TERM 上下文）+ 事件留痕 + 冷却，**不做 git 回退、不拉起**——插件编写导致的崩溃由开发者自行解决
+  - **活跃对话保护**（主环境）：救援前检测进行中对话（装了 session-manager 用 `/api/session-manager/list` 的 `running || continueRunning`；未装降级扫描事件流仅 `running`），存在则**不重启**，落盘 `git-rescue/restart-request.json` 提交「重启申请」，等对话结束后人工/后续处理；DSH down（API 不可达）视为无活跃对话，正常救援
+  - **手动救援前记录近期变动文件**：`/api/recover`（手动）先拦截活跃对话；无活跃时记录重启前 N 分钟（默认 10）内变动的文件到 `git-rescue/pre-restart-changes-<ts>.json`，记录完毕再重启，防回退丢开发者刚写的文件
+  - 新 API：`/api/recover-auto`（自动语义手动触发）、`DELETE /api/restart-request`（清除申请）；status 暴露 `testHome` / `restartRequest`
+
 ## 版本记录（X.Y.Z：功能序号.修复次数）
 
 | 版本 | 说明 |
 |------|------|
+| 1.11.0 | 功能11：测试环境不自动救援（guardian 探测 DSH_HOME 为 dsh-test-* 即禁用自动 git 回退/拉起，插件崩溃由开发者自行解决，现场保留 + 冷却）+ 活跃对话保护（救援前检测 running\|\|continueRunning，存在则落盘 restart-request.json 提交重启申请，不打断对话）+ 手动救援前记录近期变动文件（pre-restart-changes-*.json，默认 10 分钟窗口，防回退丢开发者刚写的文件） |
 | 1.10.0 | 功能10：测试环境路径判定（status.self.isTest，DSH_HOME 含 dsh-test-*）+ 沙盒环境能力检测（lib/sandbox.js：NoNewPrivs/CapEff/sudo 可行性/只读挂载，status 暴露 sandbox 字段） |
 | 1.9.0 | 功能9：测试环境入口整合（原 dsh-test-env-entry：侧边栏面板 + /api/dsh-test-env/*） |
 | 1.8.0 | 功能8：可选 sudo-key（插件配置，绝不明文显示/存储）——系统故障时 guardian 自动 remount rw 修复；无 root 环境不配置则保持"告警人工" |

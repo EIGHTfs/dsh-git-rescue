@@ -89,6 +89,22 @@ ok('b.txt 已恢复', bExists)
 console.log('== T5: httpsHelperMissing 完成 ==')
 ok('T5 检测函数可执行', typeof helperMissing === 'boolean')
 
+console.log('== T8: 测试环境路径判定（lib/test-home.js，v1.11.0） ==')
+const { isTestHomePath } = await import('./lib/test-home.js')
+const testCases = [
+  ['/vol1/@appshare/DeepSeekHarness/workspace/dsh-test-home', true],
+  ['/vol1/@appshare/DeepSeekHarness/.dsh', false],
+  ['/vol1/@appshare/DeepSeekHarness/workspace/dsh-test-rc7', true],
+  ['/vol1/@appshare/DeepSeekHarness/workspace/dsh-test-home-clean', true],
+  ['/vol1/@appshare/DeepSeekHarness/workspace/dsh-test-clean', true],
+  ['/x/y/dsh-test-env/other', false],
+  ['', null],
+  [null, null],
+]
+for (const [input, expect] of testCases) {
+  ok(`isTestHomePath(${JSON.stringify(input)}) → ${expect}`, isTestHomePath(input) === expect)
+}
+
 console.log('== T7: 设备身份（备份仓名与主机名无关） ==')
 const device = await getDeviceId(dir)
 ok('设备 ID 已获取', !!device.id && device.id.length >= 16, JSON.stringify(device))

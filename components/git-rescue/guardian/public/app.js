@@ -44,7 +44,19 @@
     const r = await api('/api/status');
     if (!r.ok) return;
     setStatus(r.state.dsh);
-    $('auto-flag').textContent = r.config.autoRecover ? '(自动救援 开)' : '(自动救援 关)';
+    // v1.11.0：测试环境模式 + 待处理重启申请提示
+    $('auto-flag').textContent = r.testHome
+      ? '(测试环境：自动救援已禁用，崩溃由开发者自行解决)'
+      : (r.config.autoRecover ? '(自动救援 开)' : '(自动救援 关)');
+    const rr = r.restartRequest;
+    const rrEl = $('restart-request-flag');
+    if (rr && rr.status === 'pending') {
+      rrEl.textContent = `⏸ 待处理重启申请：${rr.activeConversationCount} 个活跃对话（${rr.detail || ''}）。等对话结束后可点「手动救援」或删除申请文件。`;
+      rrEl.className = 'msg warn';
+      rrEl.style.display = '';
+    } else {
+      rrEl.style.display = 'none';
+    }
     if (r.state.lastRecoveryResult) {
       const lr = r.state.lastRecoveryResult;
       setMsg(`上次救援: ${lr.ok ? '✅ 成功' : '❌ 失败'} ${lr.from || '?'} → ${lr.to} @ ${(lr.at || '').slice(0, 19)}`, lr.ok ? 'ok' : 'err');

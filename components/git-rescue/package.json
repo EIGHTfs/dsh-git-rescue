@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-rescue",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "DSH git 版本管理 + 崩溃自动救援：.dsh 与 workspace 纳入 git，自动 commit、GitHub token 远端备份（REST API 降级）、崩溃自动回退、自动更新（强制跟随 GitHub 最新稳定版，环境变量 DSH_GIT_RESCUE_AUTO_UPDATE=0 可关）、接管式重启（独立脚本重启+验证，规避会话中断）",
   "type": "module",
   "main": "lib/index.js",

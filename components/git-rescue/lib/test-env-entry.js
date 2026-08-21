@@ -14,6 +14,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
+import { isTestHomePath } from './test-home.js';
 
 // 已整合进 dsh-git-rescue（原 dsh-test-env-entry）
 export const inject = ['webServer'];
@@ -50,17 +51,12 @@ function listeningPorts() {
 }
 
 /**
- * 路径判断是否为测试环境（v1.10.0，替代端口范围判断）：
+ * 路径判断是否为测试环境（v1.10.0，替代端口范围判断）：实现已抽离到 lib/test-home.js（单一真源）。
  * DSH_HOME 路径含 `dsh-test-home`（或 `dsh-test-` 前缀目录）即测试环境；
  * 主实例 /vol1/@appshare/DeepSeekHarness/.dsh 不含 → 正式环境。
  * 为什么不用端口：测试实例端口自动分配（3083-3182），残留实例也可能落在范围内，
  * 端口会撞会漂移；DSH_HOME 是实例启动时确定的稳定路径，判断更可靠。
  */
-export function isTestHomePath(dshHome) {
-  if (!dshHome) return null;
-  const norm = String(dshHome).replace(/\\/g, '/');
-  return /(^|\/)dsh-test-(home|rc7|clean)(\/|$)/.test(norm);
-}
 
 export async function registerTestEnvEntry(ctx, config = {}) {
   const cfg = Config(config);
