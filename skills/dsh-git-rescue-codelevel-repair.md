@@ -1,6 +1,6 @@
 ---
 name: dsh-git-rescue-codelevel-repair
-description: 【dsh-git-rescue 插件 skill（2026-08-20 固化，2026-08-21 更新）】救援插件**代码级自动修复能力**权威清单——哪些启动失败根因已被固化成代码（guardian 救援时自动执行），哪些只有文档记录待补：①OOM 防护（guardian startDsh 自适应 NODE_OPTIONS：物理内存 50%、env DSH_MAX_OLD_SPACE 可覆盖）**+ OOM 故障识别**（fault-classify oom 类型：跳过无用 git 回退直接拉起）②root 改配置后权限修复（repair-tools permission 工具：chown deepseek-harness + chmod 644）③裸 test 标识符检测（plugin_config 工具）④import 冒烟测试（单测 T10）⑤corrupt session log 修复（⚠️ 仅文档，未代码化）⑥peak-resume（⚠️ 仅文档，未代码化）。处理「哪些启动失败已被代码级自动修复」「guardian 会自动修什么」「repair-tools 有哪些工具」「救援经验是否已代码化」类问题时加载；与 dsh-rescue-restore（通用救援流程）、dsh-boot-troubleshooting（排查顺序）、dsh-git-rescue（项目档案）配套。
+description: 【dsh-git-rescue 插件 skill（2026-08-20 固化，2026-08-21 更新）】救援插件**代码级自动修复能力**权威清单——哪些启动失败根因已被固化成代码（guardian 救援时自动执行），哪些只有文档记录待补：①OOM 防护（guardian startDsh 自适应 NODE_OPTIONS：物理内存 50%、env DSH_MAX_OLD_SPACE 可覆盖）**+ OOM 故障识别**（fault-classify oom 类型：跳过无用 git 回退直接拉起）②root 改配置后权限修复（repair-tools permission 工具：chown deepseek-harness + chmod 644）③裸 test 标识符检测（plugin_config 工具）④import 冒烟测试（单测 T10）⑤corrupt session log 修复（已代码化：repair-tools session_repair + projectKey，2026-08-21 核实）⑥peak-resume（已代码化：guardian resumePeakIfPaused，2026-08-21 核实）。处理「哪些启动失败已被代码级自动修复」「guardian 会自动修什么」「repair-tools 有哪些工具」「救援经验是否已代码化」类问题时加载；与 dsh-rescue-restore（通用救援流程）、dsh-boot-troubleshooting（排查顺序）、dsh-git-rescue（项目档案）配套。
 whenToUse: 需要确认 dsh-git-rescue 的自动修复能力覆盖哪些故障、判断某启动失败根因是否已被代码级修复、扩展 repair-tools、给 guardian 加自动修复工具、复盘救援经验是否落地代码时。
 generatedBy: EIGHTfs 2026-08-20（外部救援经验学习融入）
 ---

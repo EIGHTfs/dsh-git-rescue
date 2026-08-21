@@ -57,6 +57,13 @@ dmesg | tail -60          # 找 I/O error / EXT4-fs error / Remounting filesyste
 | **`$DSH_WORKSPACE` env 不存在** | workspace 根 = runner 内部变量 + storage-json 配置 root（非 env） | 插件/脚本别依赖 `$DSH_WORKSPACE`；本机约定值 `/vol1/@appshare/DeepSeekHarness/workspace` 需显式传 |
 | **多进程无锁写** | storage 写入无跨进程锁 | 多实例同时写 workspace 有竞态；备份/恢复避开运行中实例写窗口 |
 
+
+## 二c、root 改配置后必须 chown（2026-08-21 固化，P0 教训）
+
+> 任何用 root 修改 `.dsh/profiles/web/` 下文件（package.json / cordis.patch.yml / settings 等）后，
+> **必须 `chown deepseek-harness:deepseek-harness` + `chmod 644`**，否则下次启动 EACCES（曾实测致 DSH 起不来）。
+> repair-tools `permission` 工具已代码化自动修（chown -R + chmod 644/755）；此处是人工操作纪律。
+
 ## 三、读历史会话日志定位报错（方法）
 
 - 会话文件 `~/.dsh/sessions/--<编码路径>--/<session-id>/session.jsonl.zstd` 是**拼接的 zstd 帧**（append 日志）：`node:zlib` 的 `zstdDecompressSync` 只解第一帧（只有 header 一行）。
