@@ -30,6 +30,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 
 | 版本 | 内容 |
 |------|------|
+| 1.12.0 | 功能12：救援前插件自更新（guardian recover 前先 checkForUpdate→applyUpdate 换新磁盘代码再救援；token 读取同插件侧 data/sensitive/github-token 优先、git-rescue/token 回退；测试环境同样允许；GUARDIAN_SELF_UPDATE=0 可关；失败 fail-soft 不阻断；status 暴露 selfUpdate） |
 | 1.11.0 | 功能11：测试环境不自动救援（guardian 探测 DSH_HOME 为 `dsh-test-*` 即禁用自动 git 回退/拉起，插件崩溃由开发者自行解决；判定抽离 `lib/test-home.js` 单一真源，guardian 与插件共用）+ 活跃对话保护（救援前检测 `running\|\|continueRunning`，存在则落盘 `git-rescue/restart-request.json` 提交重启申请，不打断对话；未装 session-manager 降级扫描事件流仅 running；DSH down 视为无活跃）+ 手动救援前记录近期变动文件（`pre-restart-changes-<ts>.json`，默认 10 分钟窗口） |
 | 1.10.0 | 功能10：测试环境路径判定（`status.self.isTest`，DSH_HOME 含 `dsh-test-*` 前缀目录；替代端口范围 3083-3182——端口会漂移、残留实例也可能落在范围内）+ 沙盒环境能力检测（`lib/sandbox.js`：NoNewPrivs/CapEff/sudo 可行性/只读挂载，status 暴露 `sandbox` 字段，供 guardian/故障分类决策） |
 | 1.9.0 | 功能9：测试环境入口整合（原 dsh-test-env-entry：侧边栏面板 + /api/dsh-test-env/*） |
@@ -56,6 +57,7 @@ whenToUse: 涉及 dsh-git-rescue 插件/guardian 的代码改动、故意破坏�
 - 触发：连续 `failThreshold=3` 次失败才救援（防单次误判）
 - 救援流程：commit 坏现场 → markBad(坏提交) → `lastGoodCommit`（跳过 bad 标记）→ `reset --hard` → `startDsh`（DSH_START_CMD 或自动推导 bin.js）→ 轮询健康（startWaitMs 默认 15s）
 - 配置全环境变量：DSH_PORT/DSH_HOME/GUARDIAN_PORT/GUARDIAN_INTERVAL_MS/GUARDIAN_FAIL_THRESHOLD/DSH_START_CMD/GUARDIAN_SESSION_LIST_PATH/GUARDIAN_PRERESTART_WINDOW_MS
+- **v1.12.0 救援前自更新**：recover 开头最先执行 `selfUpdateBeforeRecover()`——checkForUpdate（联网 api.github.com）→ 有新版 applyUpdate（替换磁盘插件文件，当前进程仍旧代码，重启后生效）→ 继续救援；失败不阻断；`GUARDIAN_SELF_UPDATE=0` 关闭
 - **v1.11.0 前置闸门（recover 开头，自动/手动都过）**：
   - 测试环境（`isTestHomePath(DSH_HOME)` 命中 `dsh-test-*`）→ **不救援**：保留现场（stderr+TERM 上下文）+ 事件 + 冷却，返回 `{testEnv:true, blocked:'test-env-no-rescue'}`——插件编写导致的崩溃由开发者自行解决
   - 活跃对话检测：`GET /api/session-manager/list`（装了 session-manager）→ 任一 `running||continueRunning` 即拦截；404（未装）→ 降级 `zstdcat` 扫描 sessions 事件流（尾部 turn/start 未 end = running）；fetch 失败（DSH down）→ 视为无活跃，正常救援

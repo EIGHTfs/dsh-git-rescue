@@ -48,3 +48,35 @@
 - `restart-request.json` 的自动处理：对话结束后由 session-manager 联动自动放行重启（当前仅人工 + `DELETE /api/restart-request`）
 - 测试环境「开发者自行解决」的辅助工具：检测到测试环境崩溃时，主动提示 `git_rescue_rollback` 用法
 - guardian 增加独立 git 仓库自检（`git rev-parse --show-toplevel` 校验 DSH_HOME 未被包在更大仓库内）
+
+---
+
+# 追加：v1.12.0 救援前插件自更新
+
+## 需求
+
+guardian 救援恢复前，如果 dsh-git-rescue 插件本身有新版（auto-update 机制），
+应先应用插件自身更新再救援——避免旧版带病救人。测试环境同样允许（自更新≠自动救援）。
+
+## 改动
+
+| 文件 | 改动 |
+|------|------|
+| `components/git-rescue/guardian/server.js` | import self-update；CFG 增加 `selfUpdate`（默认跟随 AUTO_UPDATE_ENABLED，`GUARDIAN_SELF_UPDATE=0` 可关）；新增 `readTokenForUpdate`（data/sensitive/github-token 优先、git-rescue/token 回退）+ `selfUpdateBeforeRecover()`（checkForUpdate→有新版 applyUpdate→继续救援；任何失败 fail-soft 不阻断）；recover() try 开头最先调用；status 暴露 `selfUpdate` 字段 |
+| 版本 1.11.0 → 1.12.0 + README×2 + skill | 功能12 记录 |
+
+## 关键设计（实测确认）
+
+- **当前进程仍旧代码**：applyUpdate 只替换磁盘文件，运行中的 guardian 进程 Node 已加载旧代码，
+  磁盘换新 → 下次 guardian/DSH 重启生效（符合 v1.12.0 语义：本次救援继续，后续用新版）。
+- **测试环境也允许**：自更新 ≠ 自动救援（自动救援禁的是 git 回退/拉起），二者不冲突。
+- **安全边界**：applyUpdate 会替换插件目录文件——**绝不能在开发仓库上跑 guardian 触发真实更新**
+  （会把开发源码覆盖成远端版）；验证「有更新」路径需用独立插件副本 + 假 GitHub API。
+
+## 验证（实测通过）
+
+- `node --check` 全部改动文件通过；单测 27/27 + self-update 15/15 全过
+- 端到端（独立 git 仓库 verify-home + 假 DSH server）：
+  - 自更新默认开（enabled:true），recover 成功——无更新静默跳过，不阻断救援 ✅
+  - `GUARDIAN_SELF_UPDATE=0` → status `enabled:false`，日志「救援前插件自更新: 已关闭」，recover 正常 ✅
+  - 「有更新→applyUpdate」路径逻辑由 test-self-update.mjs（T8-T11）覆盖，未在真实环境触发（防污染开发仓库）

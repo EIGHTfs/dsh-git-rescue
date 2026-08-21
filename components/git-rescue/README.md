@@ -96,6 +96,13 @@ node guardian/server.js
 GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 token）
 ```
 
+- **v1.12.0 功能十二：救援前插件自更新**
+  - guardian 是独立进程，此前不检查插件自更新（自更新只在插件进程内跑）——救援逻辑可能长期停留在旧版
+  - recover() 开始前先 `checkForUpdate`（token 读取同插件侧：`data/sensitive/github-token` 优先、`git-rescue/token` 回退），有新版则 `applyUpdate`（下载→语法校验→原子替换→回滚保护）换新磁盘代码，再继续救援
+  - 当前 guardian 进程仍运行旧代码（Node 已加载），磁盘已换新 → 下次 guardian/DSH 重启即用新代码
+  - 测试环境同样允许（自更新≠自动救援，不冲突）；`GUARDIAN_SELF_UPDATE=0` 关闭；任何失败不阻断救援（fail-soft）
+  - status 暴露 `selfUpdate: {enabled, autoUpdateEnabled}`
+
 - **v1.11.0 功能十一：测试环境不自动救援 + 活跃对话保护**
   - 测试环境判定抽离 `lib/test-home.js`（单一真源，guardian 与插件共用）；`dsh-test-home` / `dsh-test-rc7` / `dsh-test-clean`（含 `-` 变体）即测试环境
   - **测试环境不自动救援**：guardian 探测到测试环境 DSH_HOME 后，崩溃只保留现场（stderr + TERM 上下文）+ 事件留痕 + 冷却，**不做 git 回退、不拉起**——插件编写导致的崩溃由开发者自行解决
@@ -107,6 +114,7 @@ GITHUB_TOKEN=xxx node test-git-rescue.mjs   # 单元 + 真实推送（T6 需 tok
 
 | 版本 | 说明 |
 |------|------|
+| 1.12.0 | 功能12：救援前插件自更新（guardian recover 开始前先 checkForUpdate，有新版则 applyUpdate 换新磁盘代码再救援——救援逻辑本身保持最新，避免旧版带病救人；测试环境同样允许，自更新≠自动救援；GUARDIAN_SELF_UPDATE=0 可关；任何失败不阻断救援 fail-soft；status 暴露 selfUpdate 开关） |
 | 1.11.0 | 功能11：测试环境不自动救援（guardian 探测 DSH_HOME 为 dsh-test-* 即禁用自动 git 回退/拉起，插件崩溃由开发者自行解决，现场保留 + 冷却）+ 活跃对话保护（救援前检测 running\|\|continueRunning，存在则落盘 restart-request.json 提交重启申请，不打断对话）+ 手动救援前记录近期变动文件（pre-restart-changes-*.json，默认 10 分钟窗口，防回退丢开发者刚写的文件） |
 | 1.10.0 | 功能10：测试环境路径判定（status.self.isTest，DSH_HOME 含 dsh-test-*）+ 沙盒环境能力检测（lib/sandbox.js：NoNewPrivs/CapEff/sudo 可行性/只读挂载，status 暴露 sandbox 字段） |
 | 1.9.0 | 功能9：测试环境入口整合（原 dsh-test-env-entry：侧边栏面板 + /api/dsh-test-env/*） |

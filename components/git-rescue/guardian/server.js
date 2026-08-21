@@ -23,6 +23,7 @@ import { probeDshHealth } from '../lib/probe.js'
 import { startDshWithLog, captureExitContext, readLogTail } from '../lib/process-capture.js'
 import { classifyFault, probeSystemHints } from '../lib/fault-classify.js'
 import { isTestHomePath } from '../lib/test-home.js'
+import { AUTO_UPDATE_ENABLED, checkForUpdate, applyUpdate } from '../lib/self-update.js'
 
 // ============ 配置（可用环境变量覆盖） ============
 const CFG = {
@@ -47,6 +48,8 @@ const CFG = {
   sessionListPath: process.env.GUARDIAN_SESSION_LIST_PATH || '/api/session-manager/list',
   // 手动重启前记录变动的文件（时间窗，默认 10 分钟）
   preRestartChangeWindowMs: Number(process.env.GUARDIAN_PRERESTART_WINDOW_MS || 10 * 60 * 1000),
+  // v1.12.0：救援前插件自更新（默认跟随 AUTO_UPDATE_ENABLED；GUARDIAN_SELF_UPDATE=0 可关）
+  selfUpdate: process.env.GUARDIAN_SELF_UPDATE !== '0' && AUTO_UPDATE_ENABLED,
 }
 
 // 是否测试环境（v1.11.0）：测试环境不自动救援——插件编写导致的崩溃由开发者自行解决
@@ -359,6 +362,64 @@ async function recordPreRestartChanges() {
   }
 }
 
+// ============ 救援前插件自更新（v1.12.0） ============
+
+/**
+ * 读取 GitHub token：data/sensitive/github-token（新约定）优先，git-rescue/token 回退。
+ * guardian 是独立进程，需自行解析（与插件侧 readToken 同路径约定）。
+ */
+async function readTokenForUpdate() {
+  const workspace = process.env.DSH_WORKSPACE || '/vol1/@appshare/DeepSeekHarness/workspace'
+  try {
+    const t = (await fs.readFile(join(workspace, 'data', 'sensitive', 'github-token'), 'utf8')).trim()
+    if (t) return t
+  } catch { /* 回退旧路径 */ }
+  try { return (await fs.readFile(join(CFG.dshHome, 'git-rescue', 'token'), 'utf8')).trim() } catch { return '' }
+}
+
+/**
+ * 救援前插件自更新：guardian 救援逻辑本身也要保持最新——
+ * 万一旧版 rescue 代码有 bug，用旧版救援 = 带病救人。因此 recover 开始前先
+ * 检查远端是否有新版 dsh-git-rescue，有则 applyUpdate（下载→校验→原子替换→回滚保护），
+ * 替换磁盘上的插件文件；当前 guardian 进程仍运行旧代码（Node 已加载），
+ * 磁盘已换新 → 下次 guardian/DSH 重启即用新代码。测试环境同样允许（自更新≠自动救援）。
+ * 任何失败不阻断救援（fail-soft，记日志继续）。
+ * @returns {Promise<{ok:boolean, updated?:boolean, from?:string, to?:string, skipped?:boolean, error?:string}>}
+ */
+async function selfUpdateBeforeRecover() {
+  if (!CFG.selfUpdate) {
+    log('info', '救援前插件自更新: 已关闭（GUARDIAN_SELF_UPDATE=0）')
+    return { ok: true, skipped: true }
+  }
+  try {
+    const token = await readTokenForUpdate()
+    const check = await checkForUpdate(token)
+    if (!check.ok) {
+      log('warn', `救援前插件自更新检查失败（不影响救援）: ${check.detail || check.error || '未知'}`)
+      return { ok: false, error: check.detail || 'check failed' }
+    }
+    if (!check.updateAvailable) return { ok: true, skipped: true, installedVersion: check.installedVersion }
+
+    log('warn', `⬆️ 救援前检测到插件新版本 ${check.installedVersion} → ${check.remoteVersion}，先应用自更新再救援…`)
+    const r = await applyUpdate(token)
+    const ev = { time: new Date().toISOString(), level: r.ok ? 'info' : 'error', msg: `self-update ${r.ok ? (r.updated ? `${r.from} → ${r.to}` : 'no-op') : r.error}` }
+    fs.appendFile(EVENTS_FILE, JSON.stringify(ev) + '\n').catch(() => {})
+    if (r.ok && r.updated) {
+      log('warn', `✅ 插件已自更新 ${r.from} → ${r.to}（磁盘已换新，guardian 重启后生效；本次救援继续用当前进程逻辑）`)
+      return { ok: true, updated: true, from: r.from, to: r.to }
+    }
+    if (r.ok && !r.updated) {
+      log('info', `插件自更新检查通过，无实际变更（${r.from} → ${r.to || r.from}）`)
+      return { ok: true, skipped: true, from: r.from, to: r.to }
+    }
+    log('error', `插件自更新失败（不影响救援，继续用当前版本）: ${r.error}`)
+    return { ok: false, error: r.error }
+  } catch (e) {
+    log('error', `救援前插件自更新异常（不影响救援）: ${String(e?.message ?? e)}`)
+    return { ok: false, error: String(e?.message ?? e) }
+  }
+}
+
 /** 救援流程：保留现场 → 标记坏点 → 回退 → 重启 → 健康检查。
  * @param {string} source 'auto'（探活自动触发）| 'manual'（手动 /api/recover）
  * v1.11.0：
@@ -373,6 +434,9 @@ async function recover(source = 'auto') {
   state.manualBusy = true
   state.dsh = 'recovering'
   try {
+    // ===== v1.12.0 前置：救援前插件自更新（更新完继续救援；测试环境也允许，自更新≠自动救援）=====
+    await selfUpdateBeforeRecover()
+
     // ===== v1.11.0 前置闸门 =====
 
     // 0.0) 测试环境：不自动救援（插件编写导致的崩溃由开发者自行解决）
@@ -600,6 +664,7 @@ function startWeb() {
         return send(res, 200, {
           ok: true,
           testHome: IS_TEST_HOME,
+          selfUpdate: { enabled: CFG.selfUpdate, autoUpdateEnabled: AUTO_UPDATE_ENABLED },
           restartRequest: await readRestartRequest(),
           state: {
             dsh: state.dsh, lastOkAt: state.lastOkAt, lastErrorAt: state.lastErrorAt,
