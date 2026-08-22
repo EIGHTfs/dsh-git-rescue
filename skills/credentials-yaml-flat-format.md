@@ -27,6 +27,8 @@ refs:
 ```
 - 但 DSH 的 `dsh-credentials-local/lib/index.js` `parseCredentialsDocument` 只接受**纯扁平 mapping（顶层 key → 字符串值）**，不认 `version`/`refs` 包装；嵌套值（mapping）非字符串 → 抛错 → 插件加载失败 → DSH 引导中断。
 
+> **⚠️ 来源之一：打包 fpk 导致（2026-08-22 用户确认）**。fpk 打包/部署会做 YAML 解析→改字段→重写回写（如 `manifest` 改 `version` 加 `-beta` 后缀，见 `fpk-diff-report.md`），这类 YAML Document 序列化重写若作用于 `.credentials.yaml`，会把它从扁平重写成带 `version:`/`refs:` 的嵌套结构 → 主环境下次起不来。打包/部署 fpk 后重启 DSH 前，**核对 `.credentials.yaml` 是否仍是扁平**（必要时用 `credentials_fix` 修）。
+
 ## 二、正确（DSH 期望的）扁平格式
 
 ```yaml
