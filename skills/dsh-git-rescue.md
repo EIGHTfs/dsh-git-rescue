@@ -190,3 +190,4 @@ dsh-git-rescue/
 2026-08-21: LLM 自治修复成功（未 git 覆盖）: 插件配置变更后，dsh-workspace 初始化时尝试读取 Zstandard 会话日志，但日志文件头损坏（第一帧非一行头），导致插件加载失败。同时 prof（fault=plugin（LLM 自动执行，跳过 git 覆盖））
 2026-08-21: 救援成功: 回退到 1092149（fault=unknown, reason=无法判定故障类型，保守走 git 回退）
 2026-08-21: 救援成功: 回退到 3ebb517（fault=plugin, reason=插件配置变更（疑似装/改插件导致），git 回退可恢复）
+2026-08-22: LLM 自治修复成功（未 git 覆盖）: 本次故障主因在引导层：profiles/node_modules 下 23 个顶级包为真实目录而非软链（hoisted 布局），与 DSH 引导期自建软链的设计（fault=unknown（LLM 自动执行，跳过 git 覆盖））
