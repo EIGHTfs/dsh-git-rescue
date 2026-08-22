@@ -500,6 +500,30 @@ dsh-git-rescue/
 
 **版本**：2.2.2 → 2.3.1（一次提交一个小版本；含负载监测/熔断/联动三功能）。
 
+## 📋 待办：轻启动架构（2026-08-22 用户确立）
+
+> **目标**：救援恢复插件改为「最小化安装」——**主环境只装一个轻量启动器**（~几十 KB），由启动器在其代码区拉起完整的守护进程/插件本体，解除「主环境 node_modules 装完整插件 + guardian 又从 项目/ 跑」的两处代码并存，顺带修复 guardian HOME 被解析到 `/home/deepseek-harness` 导致 EACCES 的问题。
+
+**设计**（方案已确认：启动器只「拉起」，能力留给本体）：
+
+```
+主环境 node_modules/dsh-git-rescue（启动器，轻）
+  ├─ index.js         DSH 加载时：探测/拉起代码区 guardian；转发本体能力
+  ├─ package.json     注册入口
+  └─ lib/boot.js      定位代码区 → 拉起 guardian → 健康探测
+        │  拉起/转发
+代码区（完整本体，可 autoUpdate 自更新，不污染主环境）
+  ├─ 项目/dsh-git-rescue 或 /vol1/@appdata/.../dsh-git-rescue
+  ├─ lib/（index/repair-tools/llm 等）
+  ├─ guardian/server.js
+  └─ rescue-envs/ skills/
+```
+
+**要点**：
+- **启动器只「拉起」**：定位代码区（env `DSH_GIT_RESCUE_HOME` → 约定路径）→ 用正确 `HOME`/`DSH_HOME` 拉起 guardian → 透传/转发本体能力；本体 autoUpdate 只更新代码区，主环境启动器不动
+- **顺带修复 EACCES**：启动器拉起 guardian 时显式 `HOME=/vol1/@appshare/DeepSeekHarness`，不再落到不可写的 `/home/deepseek-harness`
+- **状态**：⏳ 待办（方案已定，待实施）
+
 ## 🔗 联动与源码地址
 
 ### 联动：自动续跑全局闸门（dsh-git-rescue ⇄ dsh-session-manager）

@@ -106,6 +106,7 @@ const state = {
   failCount: 0,
   lastRecoveryAt: null,
   lastRecoveryResult: null,
+  lastRecoveryWasUpdate: false,   // 2026-08-22：本次恢复是否因"插件自更新重启"引起——更新重启不计入 flapping
   log: [],                   // [{time, level, msg}]
   manualBusy: false,
   flappingCooldownUntil: null,
@@ -664,7 +665,11 @@ async function recover(source = 'auto') {
   const reasonInfo = state.lastFaultReason || ''
   try {
     // ===== 前置：救援前插件自更新（从 2.0.0 起具备；测试环境也允许，自更新≠自动救援）=====
-    await selfUpdateBeforeRecover()
+    {
+      // 2026-08-22：若本次恢复前发生了"插件自更新重启"，标记之，flapping 不计入（更新重启≠崩溃循环）
+      const upd = await selfUpdateBeforeRecover()
+      state.lastRecoveryWasUpdate = !!(upd && upd.updated)
+    }
 
     // ===== 前置闸门 =====
 
@@ -1182,7 +1187,8 @@ async function tick() {
       // 可回退：走正常 git 回退救援
       state.failCount = 0
       await recover()
-      const flap = flapping.record(Date.now(), `recover#${state.lastRecoveryResult?.to || '?'}`)
+      const flapRecoveryKind = state.lastRecoveryWasUpdate ? 'update' : 'crash'
+      const flap = flapping.record(Date.now(), `recover#${state.lastRecoveryResult?.to || '?'}`, flapRecoveryKind)
       if (flap.level === 'flapping') {
         log('error', `🚨 flapping 检出：${CFG.flappingWindowMs / 60000} 分钟内 ${flap.count} 次重启——停止自动拉起循环，保留现场，告警人工介入`)
         fs.appendFile(EVENTS_FILE, JSON.stringify({ time: new Date().toISOString(), level: 'flapping', msg: `flapping-detected: ${flap.count} restarts in ${CFG.flappingWindowMs / 60000}min` }) + '\n').catch(() => {})
