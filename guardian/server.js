@@ -66,6 +66,8 @@ const CFG = {
   selfUpdate: process.env.GUARDIAN_SELF_UPDATE !== '0' && AUTO_UPDATE_ENABLED,
   // 3080 透明代理守护（官方 proxy.js：0.0.0.0:3080 -> 127.0.0.1:3081）
   proxyEnabled: process.env.GUARDIAN_PROXY_ENABLED !== '0',
+  // 内置 LLM 诊断（默认关闭，2026-08-25 用户要求；设 GUARDIAN_LLM_ENABLED=1 开启）
+  llmEnabled: process.env.GUARDIAN_LLM_ENABLED === '1',
   proxyListenHost: process.env.GUARDIAN_PROXY_HOST || '0.0.0.0',
   proxyListenPort: Number(process.env.GUARDIAN_PROXY_PORT || 3080),
   proxyTargetHost: process.env.GUARDIAN_PROXY_TARGET_HOST || '127.0.0.1',
@@ -870,9 +872,10 @@ async function recover(source = 'auto') {
       })
       if (exp.ok && exp.appended) log('info', `🧠 救援经验已追加到权威 skill: ${exp.path}`)
     } else {
-      // ===== guardian 直连 LLM 自治诊断（2026-08-20）：失败时先让 LLM 分析根因并给白名单建议 =====
+      // ===== guardian 直连 LLM 自治诊断（2026-08-20，默认关闭 2026-08-25） =====
       let llmResult = null
-      try {
+      if (CFG.llmEnabled) {
+        try {
         const bootTail = await readLogTail(STDERR_FILE, 40)
         const gitLogR = await git(CFG.dshHome, ['log', '--oneline', '-n', '8'])
         llmResult = await llmDiagnoseRescue({
@@ -915,8 +918,9 @@ async function recover(source = 'auto') {
         } else {
           log('warn', `LLM 诊断不可用（回退模板报告）: ${llmResult.error || '未知'}`)
         }
-      } catch (e) {
-        log('warn', `LLM 诊断异常（不影响后续）: ${String(e?.message ?? e)}`)
+        } catch (e) {
+          log('warn', `LLM 诊断异常（不影响后续）: ${String(e?.message ?? e)}`)
+        }
       }
       if (!ok) {
         state.dsh = 'error'
